@@ -75,7 +75,8 @@ class QuantPipeline:
         y_mining = df_mining['label']
         
         # Initialize and Fit Generator
-        self.generator = AlphaGenerator(population_size=500, generations=5, n_jobs=1)
+        # 🔴 FIX: 使用默认优化参数(1000/20),不要覆盖
+        self.generator = AlphaGenerator(n_jobs=1)
         self.generator.fit(X_mining, y_mining)
         
         # Transform (Generate Alpha Factors)
@@ -108,8 +109,12 @@ class QuantPipeline:
 
     def run_backtest(self):
         # 1. Train and get enriched DF
-        trainer, features, df = self.train_model()
-        if not trainer: return
+        # 🔴 FIX: 安全解包,防止train_model返回None时崩溃
+        result = self.train_model()
+        if result is None: 
+            logger.error("Training failed, cannot run backtest")
+            return
+        trainer, features, df = result
         
         # 2. Backtest loop using the SAME dataframe (with alphas)
         # Note: In production, we would save the generator and transform fresh data.

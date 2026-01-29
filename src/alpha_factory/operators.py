@@ -267,4 +267,4 @@ custom_operations = [
     correlation_5, covariance_5
 ]
 
-print(f"✅ Loaded {len(custom_operations)} custom operators for Alpha Mining")
+# 算子总数: 24个自定义 + 5个gplearn基础 = 29个

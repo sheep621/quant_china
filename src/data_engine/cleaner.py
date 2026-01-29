@@ -44,6 +44,10 @@ class DataCleaner:
             df = df[df['tradestatus'] == '1'].copy()
             
         # 2. Limit Detection (优化)
+        # 🔴 FIX: pctChg是字符串类型,需要先转换
+        if 'pctChg' in df.columns:
+            df['pctChg'] = pd.to_numeric(df['pctChg'], errors='coerce')
+        
         # 使用更准确的pctChg阈值判断
         df['is_limit_up'] = df['pctChg'] >= 9.8  # 主板/中小创
         df['is_limit_down'] = df['pctChg'] <= -9.8
@@ -70,7 +74,12 @@ class DataCleaner:
         # 4. Generate Label (T+1 Strategy)
         df['next_open'] = df['open'].shift(-1)
         df['next_2_open'] = df['open'].shift(-2)
-        df['label'] = df['next_2_open'] / df['next_open'] - 1.0
+        # 🔴 FIX: 保护除法,防止next_open为0导致inf
+        df['label'] = np.where(
+            df['next_open'] > 0,
+            df['next_2_open'] / df['next_open'] - 1.0,
+            np.nan
+        )
         
         return df
 

@@ -48,10 +48,10 @@ class LGBMTrainer:
             
         logger.info(f"Starting training with {len(features)} features...")
         
-        callbacks = [
-            lgb.early_stopping(stopping_rounds=50),
-            lgb.log_evaluation(period=50)
-        ]
+        # 🔴 FIX: 只有在有验证集时才启用early_stopping
+        callbacks = [lgb.log_evaluation(period=50)]
+        if df_val is not None and len(valid_sets) > 1:
+            callbacks.append(lgb.early_stopping(stopping_rounds=50))
         
         self.model = lgb.train(
             self.default_params,

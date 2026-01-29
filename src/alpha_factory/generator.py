@@ -45,11 +45,7 @@ class AlphaGenerator:
             # === 性能配置 ===
             verbose=1,
             random_state=42,
-            n_jobs=n_jobs,
-            
-            # === 结构限制 ===
-            init_depth=(2, 6),   # 初始深度范围
-            max_depth=8          # 最大深度限制(防Bloat)
+            n_jobs=n_jobs
         )
         
     def fit(self, X, y):

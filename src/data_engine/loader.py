@@ -144,8 +144,6 @@ class DataLoader:
                 logger.info(f"Processed {i}/{len(codes)} stocks (Success: {success_count}, Skipped: {skipped_count})...")
                 
         logger.info(f"Data update completed. Success: {success_count}, Skipped: {skipped_count}, Total: {len(codes)}")
-                
-        logger.info(f"Data update completed. Success: {success_count}/{len(codes)}")
 
 if __name__ == "__main__":
     # Test script
