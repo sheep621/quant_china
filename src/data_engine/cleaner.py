@@ -22,7 +22,10 @@ class DataCleaner:
         """
         lower_bound = series.quantile(lower)
         upper_bound = series.quantile(upper)
-        return series.clip(lower=lower_bound, upper=upper_bound)
+        # 使用copy()并显式保持dtype来避免FutureWarning
+        result = series.copy()
+        result = result.clip(lower=lower_bound, upper=upper_bound)
+        return result
         
     def process_daily_data(self, df):
         """

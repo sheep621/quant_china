@@ -1,4 +1,4 @@
-import fire
+# import fire
 import pandas as pd
 import os
 from datetime import datetime, timedelta
@@ -104,6 +104,11 @@ class QuantPipeline:
         
         logger.info(f"Training on {len(df_train)} rows, Val on {len(df_val)} rows")
         
+        # 1. Run Rolling CV for robust evaluation
+        logger.info("Running Rolling Cross-Validation...")
+        self.trainer.run_cv(df_train, features, label='label', n_splits=5)
+        
+        # 2. Final Train
         self.trainer.train(df_train, features, label='label', df_val=df_val)
         return self.trainer, features, df
 
@@ -150,4 +155,9 @@ class QuantPipeline:
         logger.info(f"Backtest Result: {metrics}")
 
 if __name__ == '__main__':
-    fire.Fire(QuantPipeline)
+    import sys
+    pipeline = QuantPipeline()
+    if len(sys.argv) > 1 and sys.argv[1] == 'download_data':
+        pipeline.download_data()
+    else:
+        pipeline.run_backtest()

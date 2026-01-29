@@ -13,7 +13,7 @@ def _protected_div(x1, x2):
 
 def _protected_log(x1):
     """保护对数"""
-    with np.errstate(invalid='ignore'):
+    with np.errstate(invalid='ignore', divide='ignore'):
         return np.where(x1 > 0.001, np.log(x1), 0.)
         
 def _protected_sqrt(x1):

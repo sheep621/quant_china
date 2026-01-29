@@ -103,45 +103,57 @@ class DataLoader:
         return df
 
     def update_data(self, codes, start_date, end_date):
-        """Update data for a list of codes"""
-        logger.info(f"Starting data update for {len(codes)} stocks from {start_date} to {end_date}")
+        """Update data for a list of codes (Parallel Version)"""
+        logger.info(f"Starting PARALLEL data update for {len(codes)} stocks from {start_date} to {end_date}")
+        
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
         
         success_count = 0
         skipped_count = 0
+        lock = threading.Lock()
         
-        for i, code in enumerate(codes):
+        def _process_single_stock(code):
+            nonlocal success_count, skipped_count
+            
             file_path = self.data_dir / f"{code}.parquet"
             
-            # Resume capability: Check if file exists and is valid
+            # Resume capability
             if file_path.exists():
                 try:
-                    # Simple check: if file size > 1KB, assume it's valid enough for resume
-                    # Loading parquet to check date is safer but slower. 
-                    # Let's check size first.
                     if file_path.stat().st_size > 1000:
-                         # Optional: Read meta to check end_date?
-                         # For now/speed: Just assume if file exists, it's done. 
-                         # User can delete data/raw to force partial re-download.
-                         skipped_count += 1
-                         if i % 100 == 0:
-                            logger.info(f"Checking {i}/{len(codes)} stocks (Skipped {skipped_count})...")
-                         continue
+                         with lock:
+                             skipped_count += 1
+                             if (success_count + skipped_count) % 100 == 0:
+                                logger.info(f"Progress: {success_count + skipped_count}/{len(codes)} (Skipped: {skipped_count})")
+                         return
                 except Exception:
                     pass
             
-            current_start = start_date
-            
             try:
                 # Fetch
-                df = self.fetch_daily_data(code, current_start, end_date)
+                df = self.fetch_daily_data(code, start_date, end_date)
                 if df is not None and not df.empty:
                     df.to_parquet(file_path, index=False)
-                    success_count += 1
+                    with lock:
+                        success_count += 1
             except Exception as e:
                 logger.error(f"Error updating {code}: {e}")
-            
-            if i % 100 == 0:
-                logger.info(f"Processed {i}/{len(codes)} stocks (Success: {success_count}, Skipped: {skipped_count})...")
+                
+            with lock:
+                if (success_count + skipped_count) % 100 == 0:
+                    logger.info(f"Progress: {success_count + skipped_count}/{len(codes)} (Success: {success_count}, Skipped: {skipped_count})")
+
+        # Use ThreadPoolExecutor for concurrency
+        # max_workers=5 to avoid hitting BaoStock rate limits or connection errors
+        max_workers = 10 
+        logger.info(f"Using {max_workers} threads...")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_process_single_stock, code) for code in codes]
+            # Wait for all to complete
+            for future in as_completed(futures):
+                pass
                 
         logger.info(f"Data update completed. Success: {success_count}, Skipped: {skipped_count}, Total: {len(codes)}")
 

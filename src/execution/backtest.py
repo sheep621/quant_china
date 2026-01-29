@@ -65,8 +65,10 @@ class Backtester:
             
         shares = self.positions.get(code, 0)
         if shares > 0:
-            price = market_data['close'] # Simulating Close execution
-            amount = shares * price
+            price = market_data['close']
+            # Slippage: Sell lower
+            exec_price = price * (1 - 0.001)  # 0.1% slippage
+            amount = shares * exec_price
             cost = amount * 0.0013 # Comm + Tax
             self.cash += (amount - cost)
             del self.positions[code]
@@ -83,11 +85,14 @@ class Backtester:
         if code in self.positions:
             return # Rebalance logic omitted for simplicity
             
+        # Slippage: Buy higher
+        exec_price = price * (1 + 0.001) # 0.1% slippage
+        
         # Calc shares
-        shares = int(target_amt / price / 100) * 100
+        shares = int(target_amt / exec_price / 100) * 100
         if shares == 0: return
         
-        cost = shares * price
+        cost = shares * exec_price
         fee = cost * 0.0003
         
         if self.cash >= (cost + fee):
@@ -106,45 +111,51 @@ class Backtester:
 
     def get_metrics(self):
         """
-        计算回测指标 (优化版)
-        
-        新增:
-        - Turnover: 换手率统计
-        - Fitness Score: Sharpe / sqrt(Turnover) 
-          (文档推荐: 惩罚高换手策略)
+        Calculates professional metrics:
+        - Total Return
+        - Annualized Return (CAGR)
+        - Max Drawdown
+        - Sharpe Ratio
+        - Avg Turnover
         """
         if not self.history: 
             return {}
             
         df = pd.DataFrame(self.history)
         
-        # 1. 基础收益统计
-        df['return'] = df['asset'].pct_change()
+        # 1. Basic Returns
+        df['return'] = df['asset'].pct_change().fillna(0)
+        total_ret = (df['asset'].iloc[-1] / self.initial_capital) - 1
+        
+        # 2. Annualized Return
+        days = len(df)
+        if days > 0:
+            cagr = (df['asset'].iloc[-1] / self.initial_capital) ** (252/days) - 1
+        else:
+            cagr = 0
+            
+        # 3. Max Drawdown
+        df['cummax'] = df['asset'].cummax()
+        df['drawdown'] = (df['asset'] - df['cummax']) / df['cummax']
+        max_dd = df['drawdown'].min()
+        
+        # 4. Sharpe
         mean_ret = df['return'].mean()
         std_ret = df['return'].std()
-        
         if std_ret == 0:
             sharpe = 0
         else:
             sharpe = mean_ret / std_ret * np.sqrt(252)
         
-        # 2. 换手率统计 (简化:用asset变化幅度近似)
-        # 真实Turnover需要跟踪每日交易额,这里用资产波动率作为proxy
+        # 5. Turnover Proxy
         df['asset_change'] = df['asset'].diff().abs()
         avg_turnover = (df['asset_change'] / df['asset']).mean()
         
-        # 3. Fitness Score计算
-        # Fitness = Sharpe / sqrt(Turnover)
-        # 防止除零
-        if avg_turnover > 0:
-            fitness_score = sharpe / np.sqrt(avg_turnover)
-        else:
-            fitness_score = sharpe
-        
         return {
-            'sharpe': sharpe, 
-            'final_asset': df['asset'].iloc[-1],
-            'avg_turnover': avg_turnover,
-            'fitness_score': fitness_score
+            'total_return': f"{total_ret*100:.2f}%",
+            'cagr': f"{cagr*100:.2f}%",
+            'max_drawdown': f"{max_dd*100:.2f}%",
+            'sharpe': f"{sharpe:.2f}",
+            'final_asset': f"{df['asset'].iloc[-1]:.2f}",
         }
 
