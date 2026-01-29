@@ -1,0 +1,15 @@
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  logs: "logs"
+  models: "models"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "quant_system.log"
+
+data:
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+  frequency: "d"

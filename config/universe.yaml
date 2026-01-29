@@ -1,0 +1,20 @@
+# 动态股票池过滤规则
+
+common:
+  # 上市天数 > 180天 (剔除新股)
+  min_list_days: 180
+  
+  # 剔除ST/*ST (名称中包含ST的)
+  exclude_st: true
+  
+  # 剔除停牌 (Volume == 0)
+  exclude_halt: true
+
+liquidity:
+  # 过去20天日均成交额 > 5000万
+  min_amount_ma20: 50000000
+
+features:
+  # 涨跌停过滤 (用于买入/卖出信号屏蔽)
+  # LimitUp = 1 (涨停), LimitDown = -1 (跌停), 0 (正常)
+  enable_limit_filter: true
