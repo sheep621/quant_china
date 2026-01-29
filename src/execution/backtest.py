@@ -105,8 +105,46 @@ class Backtester:
         return self.cash + mkt_val
 
     def get_metrics(self):
-        if not self.history: return {}
+        """
+        计算回测指标 (优化版)
+        
+        新增:
+        - Turnover: 换手率统计
+        - Fitness Score: Sharpe / sqrt(Turnover) 
+          (文档推荐: 惩罚高换手策略)
+        """
+        if not self.history: 
+            return {}
+            
         df = pd.DataFrame(self.history)
+        
+        # 1. 基础收益统计
         df['return'] = df['asset'].pct_change()
-        sharpe = df['return'].mean() / df['return'].std() * np.sqrt(252)
-        return {'sharpe': sharpe, 'final_asset': df['asset'].iloc[-1]}
+        mean_ret = df['return'].mean()
+        std_ret = df['return'].std()
+        
+        if std_ret == 0:
+            sharpe = 0
+        else:
+            sharpe = mean_ret / std_ret * np.sqrt(252)
+        
+        # 2. 换手率统计 (简化:用asset变化幅度近似)
+        # 真实Turnover需要跟踪每日交易额,这里用资产波动率作为proxy
+        df['asset_change'] = df['asset'].diff().abs()
+        avg_turnover = (df['asset_change'] / df['asset']).mean()
+        
+        # 3. Fitness Score计算
+        # Fitness = Sharpe / sqrt(Turnover)
+        # 防止除零
+        if avg_turnover > 0:
+            fitness_score = sharpe / np.sqrt(avg_turnover)
+        else:
+            fitness_score = sharpe
+        
+        return {
+            'sharpe': sharpe, 
+            'final_asset': df['asset'].iloc[-1],
+            'avg_turnover': avg_turnover,
+            'fitness_score': fitness_score
+        }
+
