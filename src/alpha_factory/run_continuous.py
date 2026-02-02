@@ -9,6 +9,8 @@ import numpy as np
 import json
 from src.alpha_factory.generator import AlphaGenerator
 from src.data_engine.cleaner import DataCleaner
+from src.alpha_factory.factor_evaluator import FactorEvaluator, batch_evaluate_factors
+from src.alpha_factory.orthogonalizer import Orthogonalizer, batch_filter_factors
 from src.infrastructure.logger import get_system_logger
 
 logger = get_system_logger()
@@ -105,7 +107,12 @@ def run_alpha_factory(iterations=3):
         warm_start=True
     )
     
-    hall_of_fame = [] # 存放 (formula, fitness)
+    hall_of_fame = [] # 存放 (formula, fitness, metrics)
+    factor_pool = pd.DataFrame()  # 已接受的因子池（用于正交性检查）
+    
+    # 初始化评估器和正交化器
+    evaluator = FactorEvaluator()
+    orthogonalizer = Orthogonalizer(method='incremental', threshold=0.7)
     
     # 3. Continuous Mining Loop
     # 3. Continuous Mining Loop
@@ -121,20 +128,64 @@ def run_alpha_factory(iterations=3):
         # 支持传入 feature_names 方便生成公式可读
         candidates = generator.fit(X_train, y_train, feature_names=feature_cols)
         
-        # 4. Filter & Save
-        for alpha in candidates:
+        # 4. Evaluate & Filter with Quality Gates
+        for idx, alpha in enumerate(candidates):
             formula = alpha['formula']
             fitness = alpha['fitness']
             
-            # 这里应进行正交性检查 (需要 transform 计算因子值)
-            # 为节省时间, 仅演示逻辑
-            # scores = generator.transform(X_train, formula) 
-            # if orthogonality_check(scores, existing_scores): ...
+            # 简单去重（公式级别）
+            if any(a['formula'] == formula for a in hall_of_fame):
+                continue
             
-            # 简单去重
-            if not any(a['formula'] == formula for a in hall_of_fame):
-                hall_of_fame.append(alpha)
-                logger.info(f"New Alpha added to Hall of Fame: {formula}")
+            try:
+                # 计算因子值
+                factor_values = generator.transform(X_train)
+                if factor_values.shape[1] <= idx:
+                    continue
+                factor_series = pd.Series(factor_values[:, idx], index=X_train.index)
+                
+                # 质量评估
+                metrics = evaluator.evaluate(
+                    factor_series, 
+                    y_train,
+                    existing_factors=factor_pool
+                )
+                
+                # 质量门控检查
+                passed, reason = metrics.passes_quality_gate()
+                
+                if not passed:
+                    logger.info(f"Alpha rejected: {formula[:50]}... | {reason}")
+                    continue
+                
+                # 正交性检查
+                if not factor_pool.empty:
+                    is_unique, max_corr, most_similar = orthogonalizer.incremental_deduplication(
+                        factor_series, factor_pool
+                    )
+                    if not is_unique:
+                        logger.info(f"Alpha rejected (high correlation): {formula[:50]}...")
+                        continue
+                
+                # 通过所有检查，加入Hall of Fame
+                alpha_record = {
+                    'formula': formula,
+                    'fitness': fitness,
+                    'ICIR': metrics.ICIR,
+                    'IC_mean': metrics.IC_mean,
+                    'sharpe': metrics.long_short_sharpe,
+                    'uniqueness': metrics.factor_uniqueness
+                }
+                hall_of_fame.append(alpha_record)
+                
+                # 加入因子池
+                factor_name = f"alpha_{len(hall_of_fame)}"
+                factor_pool[factor_name] = factor_series
+                
+                logger.info(f"✓ New Alpha added: {formula[:50]}... | ICIR={metrics.ICIR:.3f}, Sharpe={metrics.long_short_sharpe:.2f}")
+                
+            except Exception as e:
+                logger.warning(f"Evaluation failed for alpha: {str(e)}")
     
         # Save Results periodically (every iteration)
         output_file = os.path.join(OUTPUT_DIR, 'discovered_alphas.json')
