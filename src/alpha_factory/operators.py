@@ -107,6 +107,69 @@ def _ts_delay_5(x1):
 def _ts_delta_1(x1): 
     return x1 - np.roll(x1, 1)
 
+# 新增多窗口时序算子
+# ts_mean (滚动均值)
+def _ts_mean_3(x1):
+    return pd.Series(x1).rolling(3).mean().fillna(0).values
+
+def _ts_mean_5(x1):
+    return pd.Series(x1).rolling(5).mean().fillna(0).values
+
+def _ts_mean_7(x1):
+    return pd.Series(x1).rolling(7).mean().fillna(0).values
+
+def _ts_mean_10(x1):
+    return pd.Series(x1).rolling(10).mean().fillna(0).values
+
+def _ts_mean_15(x1):
+    return pd.Series(x1).rolling(15).mean().fillna(0).values
+
+def _ts_mean_20(x1):
+    return pd.Series(x1).rolling(20).mean().fillna(0).values
+
+def _ts_mean_30(x1):
+    return pd.Series(x1).rolling(30).mean().fillna(0).values
+
+# ts_min/ts_max 更多窗口
+def _ts_min_3(x1):
+    return pd.Series(x1).rolling(3).min().fillna(0).values
+
+def _ts_min_10(x1):
+    return pd.Series(x1).rolling(10).min().fillna(0).values
+
+def _ts_min_20(x1):
+    return pd.Series(x1).rolling(20).min().fillna(0).values
+
+def _ts_max_3(x1):
+    return pd.Series(x1).rolling(3).max().fillna(0).values
+
+def _ts_max_10(x1):
+    return pd.Series(x1).rolling(10).max().fillna(0).values
+
+def _ts_max_20(x1):
+    return pd.Series(x1).rolling(20).max().fillna(0).values
+
+# ts_sum 更多窗口
+def _ts_sum_10(x1):
+    return pd.Series(x1).rolling(10).sum().fillna(0).values
+
+def _ts_sum_20(x1):
+    return pd.Series(x1).rolling(20).sum().fillna(0).values
+
+# ts_rank 更多窗口
+def _ts_rank_3(x1):
+    return pd.Series(x1).rolling(3).rank(pct=True).fillna(0.5).values
+
+def _ts_rank_20(x1):
+    return pd.Series(x1).rolling(20).rank(pct=True).fillna(0.5).values
+
+# ts_std 更多窗口
+def _ts_std_10(x1):
+    return pd.Series(x1).rolling(10).std().fillna(0).values
+
+def _ts_std_20(x1):
+    return pd.Series(x1).rolling(20).std().fillna(0).values
+
 # ======================
 # 3. 截面算子
 # ======================
@@ -187,16 +250,43 @@ protected_sqrt = make_function(function=_protected_sqrt, name='sqrt', arity=1)
 signed_power = make_function(function=_signed_power, name='signpow', arity=2)
 
 # 时序算子
+ts_rank_3 = make_function(function=_ts_rank_3, name='tsrank3', arity=1)
 ts_rank_5 = make_function(function=_ts_rank_5, name='tsrank5', arity=1)
 ts_rank_10 = make_function(function=_ts_rank_10, name='tsrank10', arity=1)
+ts_rank_20 = make_function(function=_ts_rank_20, name='tsrank20', arity=1)
+
+ts_mean_3 = make_function(function=_ts_mean_3, name='tsmean3', arity=1)
+ts_mean_5 = make_function(function=_ts_mean_5, name='tsmean5', arity=1)
+ts_mean_7 = make_function(function=_ts_mean_7, name='tsmean7', arity=1)
+ts_mean_10 = make_function(function=_ts_mean_10, name='tsmean10', arity=1)
+ts_mean_15 = make_function(function=_ts_mean_15, name='tsmean15', arity=1)
+ts_mean_20 = make_function(function=_ts_mean_20, name='tsmean20', arity=1)
+ts_mean_30 = make_function(function=_ts_mean_30, name='tsmean30', arity=1)
+
 decay_linear_5 = make_function(function=_decay_linear_5, name='decay5', arity=1)
 decay_linear_10 = make_function(function=_decay_linear_10, name='decay10', arity=1)
+
+ts_min_3 = make_function(function=_ts_min_3, name='tsmin3', arity=1)
 ts_min_5 = make_function(function=_ts_min_5, name='tsmin5', arity=1)
+ts_min_10 = make_function(function=_ts_min_10, name='tsmin10', arity=1)
+ts_min_20 = make_function(function=_ts_min_20, name='tsmin20', arity=1)
+
+ts_max_3 = make_function(function=_ts_max_3, name='tsmax3', arity=1)
 ts_max_5 = make_function(function=_ts_max_5, name='tsmax5', arity=1)
+ts_max_10 = make_function(function=_ts_max_10, name='tsmax10', arity=1)
+ts_max_20 = make_function(function=_ts_max_20, name='tsmax20', arity=1)
+
 ts_argmax_5 = make_function(function=_ts_argmax_5, name='tsargmax5', arity=1)
 ts_argmin_5 = make_function(function=_ts_argmin_5, name='tsargmin5', arity=1)
+
 ts_sum_5 = make_function(function=_ts_sum_5, name='tssum5', arity=1)
+ts_sum_10 = make_function(function=_ts_sum_10, name='tssum10', arity=1)
+ts_sum_20 = make_function(function=_ts_sum_20, name='tssum20', arity=1)
+
 ts_stddev_5 = make_function(function=_ts_stddev_5, name='tsstd5', arity=1)
+ts_std_10 = make_function(function=_ts_std_10, name='tsstd10', arity=1)
+ts_std_20 = make_function(function=_ts_std_20, name='tsstd20', arity=1)
+
 ts_delay_1 = make_function(function=_ts_delay_1, name='delay1', arity=1)
 ts_delay_5 = make_function(function=_ts_delay_5, name='delay5', arity=1)
 ts_delta_1 = make_function(function=_ts_delta_1, name='delta1', arity=1)
@@ -221,23 +311,29 @@ limit_distance = make_function(function=_limit_distance, name='limdist', arity=2
 correlation_5 = make_function(function=_correlation_5, name='corr5', arity=2)
 covariance_5 = make_function(function=_covariance_5, name='cov5', arity=2)
 
-# 汇总算子列表
+# 汇总算子列表 (扩展版 - 支持更多 WQ101 因子)
 custom_operations = [
     # 基础数学
     protected_div, protected_log, protected_sqrt, signed_power,
     
-    # 时序
-    ts_rank_5, ts_rank_10, decay_linear_5, decay_linear_10,
-    ts_min_5, ts_max_5, ts_argmax_5, ts_argmin_5, ts_sum_5, ts_stddev_5,
+    # 时序算子 (多窗口)
+    ts_rank_3, ts_rank_5, ts_rank_10, ts_rank_20,
+    ts_mean_3, ts_mean_5, ts_mean_7, ts_mean_10, ts_mean_15, ts_mean_20, ts_mean_30,
+    decay_linear_5, decay_linear_10,
+    ts_min_3, ts_min_5, ts_min_10, ts_min_20,
+    ts_max_3, ts_max_5, ts_max_10, ts_max_20,
+    ts_argmax_5, ts_argmin_5,
+    ts_sum_5, ts_sum_10, ts_sum_20,
+    ts_stddev_5, ts_std_10, ts_std_20,
     ts_delay_1, ts_delay_5, ts_delta_1,
-    ts_skewness_5, ts_kurtosis_5, ts_mad_5, # New
+    ts_skewness_5, ts_kurtosis_5, ts_mad_5,
     
-    # 截面
-    rank, scale, truncate, ind_neutralize, # New
+    # 截面算子
+    rank, scale, truncate, ind_neutralize,
     
-    # 逻辑/特色
-    condition, abs_val, limit_distance, # New
+    # 逻辑/特色算子
+    condition, abs_val, limit_distance,
     
-    # 关联
+    # 关联算子
     correlation_5, covariance_5
 ]

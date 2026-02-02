@@ -18,12 +18,19 @@
 *   **行业中性化**: 内置 `ind_neutralize` 算子，在挖掘阶段即可剥离行业 Beta，提取纯 Alpha。
 
 ### 2.2 增强型算子库 (`operators.py`)
-相比原生 `gplearn`，增加了 20+ 个量化专用算子：
+相比原生 `gplearn`，现已扩展至 **47+ 个量化专用算子**:
+*   **多窗口时序算子**: `ts_mean`, `ts_rank`, `ts_sum`, `ts_min`, `ts_max`, `ts_std` 支持 3/5/7/10/15/20/30 日窗口。
 *   **高阶统计**: `ts_skewness` (偏度), `ts_kurtosis` (峰度)。
 *   **稳健统计**: `ts_mad` (滚动中位差)，抗噪能力远超标准差。
 *   **向量化优化**: 全底层重写，利用 Pandas Rolling 和 Numpy，计算速度提升 10-100 倍。
 
-### 2.3 持续进化工厂 (`run_continuous.py`)
+### 2.3 WorldQuant 101 预定义因子库
+新增 `wq101_factors.py` 模块，内置 **20+ 个经典 WQ101 因子**:
+*   可直接用于回测评估
+*   可作为 GP 算法的"种子因子"，加速进化收敛
+*   包括动量、反转、成交量、波动率等多类型信号
+
+### 2.4 持续进化工厂 (`run_continuous.py`)
 *   **热启动 (Warm Start)**: 支持“接力进化”。新的一轮挖掘会继承上一轮的优秀“基因”（因子公式），随着时间推移，因子库质量会螺旋上升。
 *   **Mock 数据模式**: 内置测试数据生成器，即使没有真实行情数据，系统也能跑通演示流程。
 
@@ -38,7 +45,9 @@ quant_china/
 ├── src/
 │   ├── alpha_factory/      # [核心] 因子挖掘引擎
 │   │   ├── generator.py    # AlphaGenerator 类 (GP 算法)
-│   │   ├── operators.py    # 增强算子库
+│   │   ├── operators.py    # 增强算子库 (47+ 算子)
+│   │   ├── wq101_factors.py # WorldQuant 101 预定义因子
+│   │   ├── combine_factors.py # 因子组合模块
 │   │   └── run_continuous.py # 自动化主控脚本
 │   ├── data_engine/        # 数据清洗
 │   │   └── cleaner.py      # DataCleaner 类 (T+1 Label, Limit Calc)

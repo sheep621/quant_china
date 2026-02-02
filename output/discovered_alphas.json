@@ -1,26 +1,34 @@
 [
     {
-        "formula": "trunc(X3)",
-        "fitness": 0.09157730033283518
+        "formula": "X2",
+        "fitness": 0.11159242766834924
     },
     {
-        "formula": "X12",
-        "fitness": 0.09507076169092253
+        "formula": "sub(X2, tsrank10(X0))",
+        "fitness": 0.06894193218981015
     },
     {
-        "formula": "X4",
-        "fitness": 0.09235216017961644
+        "formula": "tsrank20(X0)",
+        "fitness": 0.08413891243776091
     },
     {
-        "formula": "X3",
-        "fitness": 0.09105095603702441
+        "formula": "delay1(tsrank10(X1))",
+        "fitness": 0.07277773325584284
     },
     {
-        "formula": "tsrank10(X4)",
-        "fitness": 0.06864261378077789
+        "formula": "X0",
+        "fitness": 0.0922017466066865
     },
     {
-        "formula": "sub(X4, X18)",
-        "fitness": 0.0577217386415195
+        "formula": "tsrank10(X1)",
+        "fitness": 0.07884160937143801
+    },
+    {
+        "formula": "sub(X2, tsrank10(tsstd20(X16)))",
+        "fitness": 0.043873076384805004
+    },
+    {
+        "formula": "sub(X2, tsrank20(X1))",
+        "fitness": 0.05103411309657976
     }
 ]
