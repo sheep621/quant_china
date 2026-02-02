@@ -69,7 +69,7 @@ class Backtester:
             # Slippage: Sell lower
             exec_price = price * (1 - 0.001)  # 0.1% slippage
             amount = shares * exec_price
-            cost = amount * 0.0013 # Comm + Tax
+            cost = amount * 0.0007 # Comm (0.02%) + Stamp Tax (0.05% - valid from Aug 2023)
             self.cash += (amount - cost)
             del self.positions[code]
             
@@ -93,7 +93,7 @@ class Backtester:
         if shares == 0: return
         
         cost = shares * exec_price
-        fee = cost * 0.0003
+        fee = cost * 0.0002 # Comm (0.02%) No Stamp Tax on Buy
         
         if self.cash >= (cost + fee):
             self.cash -= (cost + fee)

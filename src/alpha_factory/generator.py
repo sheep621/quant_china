@@ -7,16 +7,15 @@ from src.alpha_factory.operators import custom_operations
 logger = get_system_logger()
 
 class AlphaGenerator:
-    def __init__(self, population_size=1000, generations=20, n_jobs=1):
+    def __init__(self, population_size=1000, generations=20, n_jobs=1, warm_start=False):
         """
         优化后的Alpha生成器
         
         关键改进(基于研究文档):
-        1. Population: 500 → 1000 (扩大搜索空间)
-        2. Generations: 5 → 20 (充分进化)
-        3. Parsimony: 0.001 → 0.01 (强力防止Bloat过拟合)
-        4. Tournament_size: 20 → 30 (增加选择压力)
-        5. Max_samples: 0.9 → 0.8 (降低过拟合)
+        1. Population: 1000 (扩大搜索空间)
+        2. Generations: 20 (充分进化)
+        3. Parsimony: 0.01 (强力防止Bloat过拟合)
+        4. Support Warm Start (支持持续进化)
         """
         # 标准代数算子 + 自定义Quant算子
         function_set = ['add', 'sub', 'mul', 'neg', 'abs'] + custom_operations
@@ -29,15 +28,16 @@ class AlphaGenerator:
             
             # === 核心配置 ===
             function_set=function_set,
-            metric='spearman',  # RankIC核心!直接优化Rank相关性
+            metric='spearman',  # RankIC核心
             
             # === 防过拟合机制 ===
-            parsimony_coefficient=0.01,  # 复杂度惩罚!防止嵌套10层Rank
-            max_samples=0.8,             # 每代仅用80%样本
-            tournament_size=30,          # 竞标赛规模(选择压力)
+            parsimony_coefficient=0.01,
+            max_samples=0.8,
+            tournament_size=30,
+            warm_start=warm_start, # 支持热启动
             
             # === 多样性保护 ===
-            p_crossover=0.7,     # 交叉概率
+            p_crossover=0.7,
             p_subtree_mutation=0.1,
             p_hoist_mutation=0.05,
             p_point_mutation=0.1,
@@ -47,22 +47,27 @@ class AlphaGenerator:
             random_state=42,
             n_jobs=n_jobs
         )
+        self.feature_names = None
         
-    def fit(self, X, y):
+    def fit(self, X, y, feature_names=None):
         """
         执行GP挖掘
         
         参数:
             X: 特征矩阵 (DataFrame优先,自动fillna)
-            y: 目标Label (下期收益)
+            y: 目标Label (Open_T+2 / Open_T+1 - 1)
+            feature_names: 特征列名列表 (可选)
         """
+        self.feature_names = feature_names
+        if feature_names is None and isinstance(X, pd.DataFrame):
+            self.feature_names = X.columns.tolist()
+
         logger.info(f"=== Alpha Mining Started ===")
         logger.info(f"Features: {X.shape[1]}, Samples: {X.shape[0]}")
-        logger.info(f"GP Config: Pop={self.gp.population_size}, Gen={self.gp.generations}")
-        logger.info(f"Parsimony={self.gp.parsimony_coefficient} (防Bloat)")
+        logger.info(f"GP Config: Pop={self.gp.population_size}, Gen={self.gp.generations}, WarmStart={self.gp.warm_start}")
         
         try:
-            # NaN处理:gplearn不接受NaN
+            # NaN处理
             if isinstance(X, pd.DataFrame):
                 X_clean = X.fillna(0).values
             else:
@@ -77,18 +82,26 @@ class AlphaGenerator:
             
             # 输出TOP Alphas
             logger.info("TOP 5 Discovered Alphas:")
-            for i, prog in enumerate(self.gp._best_programs[:5]):
-                fitness = prog.fitness_
+            # Note: _best_programs is a list of programs
+            # If warm_start is True, _best_programs accumulates? No, warm_start mainly affects population init.
+            
+            saved_alphas = []
+            for i, prog in enumerate(self.gp._best_programs[:10]):
+                if prog is None: continue
+                # 如果有feature_names, 尝试格式化打印? 
+                # gplearn 自动使用 X0, X1... 这里打印 raw formula 即可
+                fitness = prog.fitness_ if hasattr(prog, 'fitness_') else 0.0
                 logger.info(f"  Alpha#{i+1} | Fitness={fitness:.4f} | {prog}")
+                saved_alphas.append({'formula': str(prog), 'fitness': fitness})
+                
+            return saved_alphas
                 
         except Exception as e:
             logger.error(f"GP Mining Failed: {e}")
             raise e
             
     def transform(self, X):
-        """
-        应用已训练的GP生成Alpha特征
-        """
+        """应用已训练的GP生成Alpha特征"""
         if isinstance(X, pd.DataFrame):
             X_clean = X.fillna(0).values
         else:

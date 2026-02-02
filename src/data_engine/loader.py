@@ -79,7 +79,7 @@ class DataLoader:
         rs = bs.query_history_k_data_plus(code,
             fields,
             start_date=start_date, end_date=end_date,
-            frequency="d", adjustflag="2")
+            frequency="d", adjustflag="1")
             
         if rs.error_code != '0':
             logger.warning(f"query_history_k_data_plus failed for {code}: {rs.error_msg}")

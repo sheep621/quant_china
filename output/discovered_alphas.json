@@ -1,0 +1,26 @@
+[
+    {
+        "formula": "trunc(X3)",
+        "fitness": 0.09157730033283518
+    },
+    {
+        "formula": "X12",
+        "fitness": 0.09507076169092253
+    },
+    {
+        "formula": "X4",
+        "fitness": 0.09235216017961644
+    },
+    {
+        "formula": "X3",
+        "fitness": 0.09105095603702441
+    },
+    {
+        "formula": "tsrank10(X4)",
+        "fitness": 0.06864261378077789
+    },
+    {
+        "formula": "sub(X4, X18)",
+        "fitness": 0.0577217386415195
+    }
+]
