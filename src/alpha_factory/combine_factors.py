@@ -92,6 +92,14 @@ def main():
     # All columns in df become variables
     context = {col: df_clean[col].values for col in df_clean.columns}
     
+    # Also map X0, X1... to feature columns to support gplearn default names
+    # We must use the same logic as run_continuous.py to determine feature columns
+    exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'tradestatus']
+    feature_cols = [c for c in df_clean.columns if c not in exclude_cols]
+    
+    for i, col in enumerate(feature_cols):
+        context[f'X{i}'] = df_clean[col].values
+    
     # 3. Construct Factor Matrix
     factor_data = {}
     valid_alphas = []
