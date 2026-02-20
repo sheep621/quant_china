@@ -141,8 +141,8 @@ class DataLoader:
                     pass
             
             try:
-                # 增加请求微小间隔，防止瞬间打爆baostock服务
-                time.sleep(0.5)
+                # 针对云环境(GitHub Actions)，拉长间隔防止被Baostock封禁IP或切断数据流
+                time.sleep(1.5)
                 # Fetch
                 df = self.fetch_daily_data(code, start_date, end_date)
                 if df is not None and not df.empty:
@@ -156,10 +156,9 @@ class DataLoader:
                 if (success_count + skipped_count) % 100 == 0:
                     logger.info(f"Progress: {success_count + skipped_count}/{len(codes)} (Success: {success_count}, Skipped: {skipped_count})")
 
-        # 修改并发数以适应免费数据接口的限制
-        # max_workers=10 容易导致baostock报 broken pipe 或者 reset
-        max_workers = 3 
-        logger.info(f"Using {max_workers} threads to be gentle on Baostock servers...")
+        # 修改并发数为1：Baostock对云主机IP的并发限制极严，多线程容易抛出解压失败或Broken Pipe
+        max_workers = 1 
+        logger.info(f"Using {max_workers} threads to be extremely gentle on Baostock servers...")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_process_single_stock, code) for code in codes]
