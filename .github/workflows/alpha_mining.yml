@@ -23,6 +23,18 @@ jobs:
         python -m pip install --upgrade pip
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         
+    - name: Get current date
+      id: date
+      run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        
+    - name: Cache Market Data
+      uses: actions/cache@v3
+      with:
+        path: data/raw
+        key: market-data-${{ runner.os }}-${{ steps.date.outputs.date }}
+        restore-keys: |
+          market-data-${{ runner.os }}-
+        
     - name: Run Alpha Mining
       run: |
         # Run for 50 iterations
