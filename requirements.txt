@@ -4,3 +4,5 @@ scikit-learn==1.5.2
 gplearn==0.4.2
 scipy>=1.7.0
 lightgbm
+baostock
+pyarrow
