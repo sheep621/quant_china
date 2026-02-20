@@ -4,6 +4,39 @@ import numpy as np
 import os
 from src.infrastructure.logger import get_system_logger
 from src.alpha_factory.operators import custom_operations
+from gplearn.fitness import make_fitness
+from scipy.stats import spearmanr
+
+def _daily_ic_mean(y, y_pred, w):
+    """
+    高度定制的适应度函数: 每日截面 IC 的均值
+    这是实战量化真正优化的横向截面选股能力，非大盘顺周期趋势。
+    """
+    from src.alpha_factory.context import DataContext
+    dates = DataContext.get_dates()
+    
+    if dates is None or len(dates) != len(y):
+        # Fallback 到全量平铺IC (由于DataPipeline原因未能获取日期掩码)
+        try:
+            return spearmanr(y, y_pred)[0]
+        except:
+            return 0.0
+            
+    df = pd.DataFrame({'y': y, 'y_pred': y_pred, 'date': dates})
+    
+    def _spearman(sub):
+        if len(sub) < 10: return np.nan
+        # 排除模型预测出常数导致 Spearman 报错的问题
+        if sub['y_pred'].nunique() <= 1: return 0.0
+        return spearmanr(sub['y'], sub['y_pred'])[0]
+        
+    ics = df.groupby('date').apply(_spearman).dropna()
+    if len(ics) == 0:
+        return 0.0
+    return ics.mean()
+
+# 越高越好的适应度
+daily_ic_metric = make_fitness(function=_daily_ic_mean, greater_is_better=True)
 
 logger = get_system_logger()
 
@@ -29,7 +62,7 @@ class AlphaGenerator:
             
             # === 核心配置 ===
             function_set=function_set,
-            metric='spearman',  # RankIC核心
+            metric=daily_ic_metric,  # 使用真正的截面IC作为进化罗盘
             
             # === 防过拟合机制 ===
             parsimony_coefficient=0.01,
@@ -55,9 +88,10 @@ class AlphaGenerator:
         if self.gp.warm_start and self.checkpoint_path:
             self._load_checkpoint()
         
-    def fit(self, X, y, feature_names=None):
+    def fit(self, X, y, feature_names=None, codes=None, dates=None):
         """
         执行GP挖掘
+
         
         参数:
             X: 特征矩阵 (DataFrame优先,自动fillna)
@@ -71,6 +105,12 @@ class AlphaGenerator:
         logger.info(f"=== Alpha Mining Started ===")
         logger.info(f"Features: {X.shape[1]}, Samples: {X.shape[0]}")
         logger.info(f"GP Config: Pop={self.gp.population_size}, Gen={self.gp.generations}, WarmStart={self.gp.warm_start}")
+        
+        # 注入 DataContext 防止多股数据串行污染
+        from src.alpha_factory.context import DataContext
+        if codes is not None and dates is not None:
+            DataContext.set_context(codes, dates)
+            logger.info("DataContext initialized successfully for TS & CS isolation.")
         
         try:
             # NaN处理
@@ -106,8 +146,12 @@ class AlphaGenerator:
             logger.error(f"GP Mining Failed: {e}")
             raise e
             
-    def transform(self, X):
+    def transform(self, X, codes=None, dates=None):
         """应用已训练的GP生成Alpha特征"""
+        from src.alpha_factory.context import DataContext
+        if codes is not None and dates is not None:
+            DataContext.set_context(codes, dates)
+
         if isinstance(X, pd.DataFrame):
             X_clean = X.fillna(0).values
         else:

@@ -10,22 +10,30 @@ from scipy.stats import skew, kurtosis
 def _protected_div(x1, x2):
     """保护除法,避免除零"""
     with np.errstate(divide='ignore', invalid='ignore'):
-        return np.where(np.abs(x2) > 0.001, np.divide(x1, x2), 1.)
+        res = np.where(np.abs(x2) > 0.001, np.divide(x1, x2), 1.0)
+        return np.where(np.isfinite(res), res, 1.0)
 
 def _protected_log(x1):
     """保护对数"""
     with np.errstate(invalid='ignore', divide='ignore'):
-        return np.where(x1 > 0.001, np.log(x1), 0.)
+        res = np.where(x1 > 0.001, np.log(x1), 0.0)
+        return np.where(np.isfinite(res), res, 0.0)
         
 def _protected_sqrt(x1):
     """保护平方根"""
     with np.errstate(invalid='ignore'):
-        return np.where(x1 > 0., np.sqrt(x1), 0.)
+        res = np.where(x1 > 0.0, np.sqrt(x1), 0.0)
+        return np.where(np.isfinite(res), res, 0.0)
 
 def _signed_power(x1, x2):
     """保持符号的幂运算 - 用于放大动量信号"""
-    with np.errstate(invalid='ignore'):
-        return np.sign(x1) * (np.abs(x1) ** x2)
+    with np.errstate(all='ignore'):
+        # 截断指数，防止算子为了拟合而生成负一万或正一万的终极过拟合幂数
+        x2_safe = np.clip(x2, -5.0, 5.0)
+        # 保护底数，防止出现接近 0 的负数次方导致除零
+        x1_safe = np.where((np.abs(x1) < 1e-5) & (x2_safe < 0), np.sign(x1) * 1e-5 + 1e-8, x1)
+        res = np.sign(x1_safe) * (np.abs(x1_safe) ** x2_safe)
+        return np.where(np.isfinite(res), res, 0.0)
 
 # ======================
 # 2. 时序算子 (向量化优化版)
@@ -170,6 +178,39 @@ def _ts_std_10(x1):
 def _ts_std_20(x1):
     return pd.Series(x1).rolling(20).std().fillna(0).values
 
+# 新增高阶时序特征: EWMA (指数移动平均 - 对近期价格极其敏感)
+def _ewma_5(x1):
+    return pd.Series(x1).ewm(span=5, adjust=False).mean().fillna(0).values
+
+def _ewma_10(x1):
+    return pd.Series(x1).ewm(span=10, adjust=False).mean().fillna(0).values
+
+def _ewma_20(x1):
+    return pd.Series(x1).ewm(span=20, adjust=False).mean().fillna(0).values
+
+# 新增高阶时序特征: Ts_Zscore (时序标准化 - 极其重要的均值回归指标)
+def _ts_zscore_5(x1):
+    s = pd.Series(x1)
+    return ((s - s.rolling(5).mean()) / (s.rolling(5).std() + 1e-8)).replace([np.inf, -np.inf], 0).fillna(0).values
+
+def _ts_zscore_10(x1):
+    s = pd.Series(x1)
+    return ((s - s.rolling(10).mean()) / (s.rolling(10).std() + 1e-8)).replace([np.inf, -np.inf], 0).fillna(0).values
+
+def _ts_zscore_20(x1):
+    s = pd.Series(x1)
+    return ((s - s.rolling(20).mean()) / (s.rolling(20).std() + 1e-8)).replace([np.inf, -np.inf], 0).fillna(0).values
+
+# 新增高阶时序特征: Ts_Return (N日收益率)
+def _ts_return_5(x1):
+    s = pd.Series(x1)
+    return (s.diff(5) / (s.shift(5).abs() + 1e-8)).replace([np.inf, -np.inf], 0).fillna(0).values
+
+def _ts_return_10(x1):
+    s = pd.Series(x1)
+    return (s.diff(10) / (s.shift(10).abs() + 1e-8)).replace([np.inf, -np.inf], 0).fillna(0).values
+
+
 # ======================
 # 3. 截面算子
 # ======================
@@ -223,9 +264,9 @@ def _limit_distance(x1, x2):
     Return: 距离涨停板的百分比 (负数)
     """
     with np.errstate(divide='ignore', invalid='ignore'):
-        # 距离 = (Close / Limit) - 1
-        # 越接近0表示越接近涨停
-        return np.where(x2 > 0, (x1 / x2) - 1.0, -1.0)
+        # 增加极其微小的容差和极值钳制，严防 x2 接近 0 或 x1 极大带来的 Infinity
+        res = np.where(x2 > 1e-5, (x1 / x2) - 1.0, -1.0)
+        return np.where(np.isfinite(res), res, -1.0)
 
 # ======================
 # 5. 高级统计算子
@@ -243,7 +284,85 @@ def _covariance_5(x1, x2):
 # 注册为gplearn函数
 # ======================
 
+
+from src.alpha_factory.context import DataContext
+original_make_function = make_function
+
+def custom_make_function(function, name, arity):
+    import re
+    import pandas as pd
+    
+    if name == 'rank':
+        def wrapper(x1):
+            dates = DataContext.get_dates()
+            if dates is None:
+                return function(x1)
+            df = pd.DataFrame({'val': x1, 'date': dates})
+            return df.groupby('date')['val'].rank(pct=True).fillna(0.5).values
+        wrapper.__name__ = function.__name__
+        func_to_register = wrapper
+        
+    elif name == 'scale':
+        # scale必须逐日计算截面和，否则会用未来的总成交量归一化过去的特征，严重漏洞
+        def wrapper(x1):
+            dates = DataContext.get_dates()
+            if dates is None:
+                return function(x1)
+            df = pd.DataFrame({'val': x1, 'date': dates})
+            sums = df.groupby('date')['val'].transform(lambda x: np.nansum(np.abs(x)))
+            return (df['val'] / (sums + 0.0001)).replace([np.inf, -np.inf], 0).fillna(0).values
+        wrapper.__name__ = function.__name__
+        func_to_register = wrapper
+        
+    elif name == 'truncate':
+        # truncate也必须逐日截面计算分位数，防未来信息穿越
+        def wrapper(x1):
+            dates = DataContext.get_dates()
+            if dates is None:
+                return function(x1)
+            df = pd.DataFrame({'val': x1, 'date': dates})
+            def _trunc(x):
+                valid_x = x.dropna()
+                if len(valid_x) == 0: return x
+                p1, p99 = np.nanpercentile(valid_x, 1), np.nanpercentile(valid_x, 99)
+                return np.clip(x, p1, p99)
+            return df.groupby('date')['val'].transform(_trunc).values
+        wrapper.__name__ = function.__name__
+        func_to_register = wrapper
+        
+    elif name == 'indneu':
+        func_to_register = function
+        
+    else:
+        m = re.search(r'_(\d+)$', function.__name__)
+        if m:
+            window = int(m.group(1))
+            if arity == 1:
+                def wrapper(x1):
+                    res = function(x1)
+                    return DataContext.mask_invalid_ts(res, window)
+            elif arity == 2:
+                def wrapper(x1, x2):
+                    res = function(x1, x2)
+                    return DataContext.mask_invalid_ts(res, window)
+            elif arity == 3:
+                def wrapper(x1, x2, x3):
+                    res = function(x1, x2, x3)
+                    return DataContext.mask_invalid_ts(res, window)
+            else:
+                wrapper = function
+            wrapper.__name__ = function.__name__
+            func_to_register = wrapper
+        else:
+            func_to_register = function
+            
+    return original_make_function(function=func_to_register, name=name, arity=arity)
+
+# Override make_function in this module namespace
+make_function = custom_make_function
+
 # 基础运算 (4个)
+
 protected_div = make_function(function=_protected_div, name='div', arity=2)
 protected_log = make_function(function=_protected_log, name='log', arity=1)
 protected_sqrt = make_function(function=_protected_sqrt, name='sqrt', arity=1)
@@ -296,6 +415,19 @@ ts_skewness_5 = make_function(function=_ts_skewness_5, name='skew5', arity=1)
 ts_kurtosis_5 = make_function(function=_ts_kurtosis_5, name='kurt5', arity=1)
 ts_mad_5 = make_function(function=_ts_mad_5, name='mad5', arity=1)
 
+# 注册新增高阶时序算子
+ewma_5 = make_function(function=_ewma_5, name='ewma5', arity=1)
+ewma_10 = make_function(function=_ewma_10, name='ewma10', arity=1)
+ewma_20 = make_function(function=_ewma_20, name='ewma20', arity=1)
+
+ts_zscore_5 = make_function(function=_ts_zscore_5, name='tszscore5', arity=1)
+ts_zscore_10 = make_function(function=_ts_zscore_10, name='tszscore10', arity=1)
+ts_zscore_20 = make_function(function=_ts_zscore_20, name='tszscore20', arity=1)
+
+ts_return_5 = make_function(function=_ts_return_5, name='tsret5', arity=1)
+ts_return_10 = make_function(function=_ts_return_10, name='tsret10', arity=1)
+
+
 # 截面算子
 rank = make_function(function=_rank, name='rank', arity=1)
 scale = make_function(function=_scale, name='scale', arity=1)
@@ -327,6 +459,9 @@ custom_operations = [
     ts_stddev_5, ts_std_10, ts_std_20,
     ts_delay_1, ts_delay_5, ts_delta_1,
     ts_skewness_5, ts_kurtosis_5, ts_mad_5,
+    ewma_5, ewma_10, ewma_20,
+    ts_zscore_5, ts_zscore_10, ts_zscore_20,
+    ts_return_5, ts_return_10,
     
     # 截面算子
     rank, scale, truncate, ind_neutralize,

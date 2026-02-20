@@ -39,25 +39,14 @@ def evaluate_formula(formula, context):
     # Custom operators are imported from operators.py
     
     # We need to construct a safe evaluation environment
+    # 致命架构缺陷修复：废弃硬编码字典，动态全量挂载自 _operators 中的所有防护版算子
+    from src.alpha_factory.operators import custom_operations
     safe_dict = {
-        'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'div': protected_div,
-        'neg': np.negative, 'abs': np.abs, 'log': protected_log, 'sqrt': protected_sqrt,
-        'signpow': signed_power,
-        
-        'tsrank5': ts_rank_5, 'tsrank10': ts_rank_10, 
-        'decay5': decay_linear_5, 'decay10': decay_linear_10,
-        'tsmin5': ts_min_5, 'tsmax5': ts_max_5, 
-        'tsargmax5': ts_argmax_5, 'tsargmin5': ts_argmin_5,
-        'tssum5': ts_sum_5, 'tsstd5': ts_stddev_5,
-        'delay1': ts_delay_1, 'delay5': ts_delay_5, 'delta1': ts_delta_1,
-        'skew5': ts_skewness_5, 'kurt5': ts_kurtosis_5, 'mad5': ts_mad_5,
-        
-        'rank': rank, 'scale': scale, 'trunc': truncate, 'indneu': ind_neutralize,
-        
-        'if': condition, 'abs': abs_val, 'limdist': limit_distance,
-        
-        'corr5': correlation_5, 'cov5': covariance_5
+        'add': np.add, 'sub': np.subtract, 'mul': np.multiply,
+        'neg': np.negative, 'abs': np.abs
     }
+    for op in custom_operations:
+        safe_dict[op.name] = op.function
     
     # Add dataframe columns as variables
     # context is a dict of {col_name: np.array}
@@ -88,13 +77,18 @@ def main():
     cleaner = DataCleaner()
     df_clean = cleaner.process_daily_data(df)
     
+    # 致命架构缺陷修复：必须在评价前全局装载时空掩码上下文，否则所有的截面/时序算子将在复盘计算时全量穿透股票隔离屏障！
+    from src.alpha_factory.context import DataContext
+    DataContext.set_context(df_clean['code'].values, df_clean['date'].values)
+    
     # Prepare context for evaluation (arrays)
     # All columns in df become variables
     context = {col: df_clean[col].values for col in df_clean.columns}
     
     # Also map X0, X1... to feature columns to support gplearn default names
     # We must use the same logic as run_continuous.py to determine feature columns
-    exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'tradestatus']
+    # We must use the same logic as run_continuous.py to determine feature columns
+    exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
     feature_cols = [c for c in df_clean.columns if c not in exclude_cols]
     
     for i, col in enumerate(feature_cols):

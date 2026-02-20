@@ -13,6 +13,7 @@ class Backtester:
         # T+1 logic: Positions bought today are locked.
         self.locked_positions = {} # {code: shares}
         self.history = []
+        self.last_prices = {} # {code: last_close_price}
 
     def execute_daily(self, date, alpha_scores, daily_data_dict):
         """
@@ -20,6 +21,11 @@ class Backtester:
         alpha_scores: dict {code: score}
         daily_data_dict: dict {code: {open, close, limit_up, limit_down, ...}}
         """
+        # 0. Update last known prices
+        for code, data in daily_data_dict.items():
+            if 'close' in data and not pd.isna(data['close']):
+                self.last_prices[code] = data['close']
+                
         # 1. Unlock yesterday's bought positions
         for code, shares in self.locked_positions.items():
             current = self.positions.get(code, 0)
@@ -59,13 +65,16 @@ class Backtester:
         
     def _sell(self, code, market_data, total_asset):
         if not market_data: return
-        # Check Limit Up (cannot buy) / Limit Down (cannot sell)
-        if market_data.get('is_limit_down'):
+        # A股 T+1 交易：T日盘后决策，T+1日开盘执行（若T+1开盘跌停则报单被锁死无法成交）
+        if market_data.get('next_is_limit_down', market_data.get('is_limit_down', False)):
+            logger.info(f"{code} is LIMIT DOWN next day. Cannot sell.")
             return # Stuck
             
         shares = self.positions.get(code, 0)
         if shares > 0:
-            price = market_data['close']
+            # 必须且只能在 T+1 开盘价成交以杜绝未来函数
+            price = market_data.get('next_open', market_data['close'])
+            if pd.isna(price) or price <= 0: return
             # Slippage: Sell lower
             exec_price = price * (1 - 0.001)  # 0.1% slippage
             amount = shares * exec_price
@@ -75,11 +84,15 @@ class Backtester:
             
     def _buy(self, code, target_weight, market_data, total_asset):
         if not market_data: return
-        if market_data.get('is_limit_up'):
+        # A股 T+1 交易：如果 T+1 开盘价即涨停（一字板或者竞价秒板），则无法买入
+        if market_data.get('next_is_limit_up', market_data.get('is_limit_up', False)):
+            logger.info(f"{code} is LIMIT UP next day. Cannot buy.")
             return # Cannot buy
             
         target_amt = total_asset * target_weight
-        price = market_data['close']
+        # 必须在 T+1 的开盘成交
+        price = market_data.get('next_open', market_data['close'])
+        if pd.isna(price) or price <= 0: return
         
         # Already hold?
         if code in self.positions:
@@ -88,7 +101,7 @@ class Backtester:
         # Slippage: Buy higher
         exec_price = price * (1 + 0.001) # 0.1% slippage
         
-        # Calc shares
+        # Calc shares (A股需为100的整数倍)
         shares = int(target_amt / exec_price / 100) * 100
         if shares == 0: return
         
@@ -103,9 +116,11 @@ class Backtester:
     def get_total_asset(self, daily_data_dict):
         mkt_val = 0
         for code, shares in self.positions.items():
-            price = 0
+            price = self.last_prices.get(code, 0.0)
             if daily_data_dict and code in daily_data_dict:
-                 price = daily_data_dict[code]['close']
+                 current_close = daily_data_dict[code].get('close', 0.0)
+                 if current_close > 0:
+                     price = current_close
             mkt_val += shares * price
         return self.cash + mkt_val
 

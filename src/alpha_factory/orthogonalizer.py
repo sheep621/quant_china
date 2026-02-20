@@ -93,13 +93,14 @@ class Orthogonalizer:
             else:
                 return factor_values
     
-    def incremental_deduplication(self, new_factor, existing_factors, threshold=None):
+    def incremental_deduplication(self, new_factor, existing_factors, dates=None, threshold=None):
         """
         增量去重：检查新因子是否与已有因子高度相关
         
         参数:
             new_factor: pd.Series or np.ndarray - 新因子
             existing_factors: pd.DataFrame - 已有因子池
+            dates: pd.Series/np.array - 对应的交易日数组(A股必须每天分开算截面相关性)
             threshold: float - 相关性阈值 (默认使用初始化的threshold)
             
         返回:
@@ -113,22 +114,37 @@ class Orthogonalizer:
         
         # 转换为Series
         if isinstance(new_factor, np.ndarray):
-            new_factor = pd.Series(new_factor)
+            new_factor = pd.Series(new_factor, index=existing_factors.index)
         
-        # 计算与所有已有因子的相关性
-        correlations = {}
-        for col in existing_factors.columns:
-            existing = existing_factors[col]
-            
-            # 对齐索引
-            common_idx = new_factor.index.intersection(existing.index)
-            if len(common_idx) < 10:
-                continue
-            
-            # 计算相关性
-            corr = new_factor.loc[common_idx].corr(existing.loc[common_idx])
-            if not np.isnan(corr):
-                correlations[col] = abs(corr)
+        # 如果没有给定 date，强行回退到扁平序列相关性（非常不推荐但为了兼容）
+        if dates is None:
+            logger.warning("No dates provided to orthogonalizer, falling back to 1D Pearson correlation (Not Recommended)")
+            correlations = {}
+            for col in existing_factors.columns:
+                existing = existing_factors[col]
+                common_idx = new_factor.index.intersection(existing.index)
+                if len(common_idx) < 10:
+                    continue
+                corr = new_factor.loc[common_idx].corr(existing.loc[common_idx], method='spearman')
+                if not np.isnan(corr):
+                    correlations[col] = abs(corr)
+        else:
+            # A股实战标准：Daily Cross-sectional Spearman Rank Correlation 平均值
+            df = pd.DataFrame({'new': new_factor, 'date': dates})
+            for col in existing_factors.columns:
+                df[col] = existing_factors[col]
+                
+            correlations = {}
+            for col in existing_factors.columns:
+                # 按照日期groupby计算每天的斯皮尔曼相关性
+                def _daily_spearman(sub_df):
+                    if len(sub_df) < 5: return np.nan
+                    return sub_df['new'].corr(sub_df[col], method='spearman')
+                    
+                daily_corrs = df.groupby('date').apply(_daily_spearman)
+                mean_corr = daily_corrs.mean()
+                if not np.isnan(mean_corr):
+                    correlations[col] = abs(mean_corr)
         
         if not correlations:
             return True, 0.0, None

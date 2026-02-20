@@ -75,12 +75,25 @@ class QuantPipeline:
         y_mining = df_mining['label']
         
         # Initialize and Fit Generator
-        # 🔴 FIX: 使用默认优化参数(1000/20),不要覆盖
+        # 🔴 FIX: 必须传入 codes 和 dates 以激活 DataContext 防止跨股票/跨时空的未来数据穿越
+        codes_mining = df_mining['code'].values
+        dates_mining = df_mining['date'].values
+        
         self.generator = AlphaGenerator(n_jobs=1)
-        self.generator.fit(X_mining, y_mining)
+        self.generator.fit(
+            X_mining, y_mining,
+            feature_names=base_features,
+            codes=codes_mining,
+            dates=dates_mining
+        )
         
         # Transform (Generate Alpha Factors)
-        new_alphas = self.generator.transform(df[base_features])
+        # 同样必须传入时空上下文供时序截面算子锚定
+        new_alphas = self.generator.transform(
+            df[base_features],
+            codes=df['code'].values,
+            dates=df['date'].values
+        )
         new_alpha_cols = [f"alpha_{i}" for i in range(new_alphas.shape[1])]
         
         df_alphas = pd.DataFrame(new_alphas, columns=new_alpha_cols, index=df.index)

@@ -108,6 +108,17 @@ class DataCleaner:
             low_limit = df['preClose'] * (1 - df['limit_ratio'])
             low_limit = low_limit.round(2)
             df['is_limit_down'] = df['close'] <= (low_limit + 0.01)
+            
+            # 【致命漏洞修复：时空平移的虚假期权】
+            # T日收盘出信号，要在T+1日开盘买。如果T+1日开盘就极其强势甚至涨停，根本买不进去。
+            # 同样地，如果要在T+2日开盘卖，遇到一字跌停也卖不出去。
+            # 因此，这里的掩码真正该拦截的，是T+1日的is_limit_up和T+2日的is_limit_down！
+            grouped_limit_up = df.groupby('code')['is_limit_up']
+            grouped_limit_down = df.groupby('code')['is_limit_down']
+            df['next_is_limit_up'] = grouped_limit_up.shift(-1).fillna(False)
+            df['next_is_limit_down'] = grouped_limit_down.shift(-1).fillna(False)
+            df['next_2_is_limit_down'] = grouped_limit_down.shift(-2).fillna(False)
+
         
         # 3. 特征预处理 (Rank + MAD)
         cols_to_process = [c for c in ['volume', 'amount', 'turn', 'pctChg'] if c in df.columns]

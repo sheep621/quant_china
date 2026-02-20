@@ -51,17 +51,18 @@ class FactorMetrics:
         
     def passes_quality_gate(self):
         """
-        质量门控检查
+        质量门控检查 (A股实战地狱级严苛版)
         返回 (通过, 原因)
         """
         criteria = {
-            'ICIR': (self.ICIR > 0.5, f"ICIR={self.ICIR:.3f} < 0.5"),
+            'ICIR': (self.ICIR > 1.0, f"ICIR={self.ICIR:.3f} < 1.0 (需要极其稳健的预测力)"),
             'IC_positive_ratio': (self.IC_positive_ratio > 0.55, f"IC胜率={self.IC_positive_ratio:.2%} < 55%"),
-            'turnover': (self.turnover < 0.5, f"换手率={self.turnover:.2%} > 50%"),
+            'turnover': (self.turnover < 0.4, f"换手率={self.turnover:.2%} > 40% (剥离过度交易因子)"),
             'uniqueness': (self.factor_uniqueness > 0.3, f"特异性={self.factor_uniqueness:.2f} < 0.3"),
         }
         
         failed = [reason for passed, reason in criteria.values() if not passed]
+
         
         if not failed:
             return True, "所有质量检查通过"
@@ -76,7 +77,7 @@ class FactorEvaluator:
     def __init__(self):
         pass
         
-    def evaluate(self, factor_values, returns, dates=None, existing_factors=None):
+    def evaluate(self, factor_values, returns, dates=None, existing_factors=None, luld_mask=None, codes=None):
         """
         完整的因子评估
         
@@ -85,6 +86,8 @@ class FactorEvaluator:
             returns: pd.Series or np.ndarray - 对应的未来收益率
             dates: pd.Series - 日期序列 (可选，用于时序分析)
             existing_factors: pd.DataFrame - 已有因子池 (用于计算特异性)
+            luld_mask: pd.Series - 涨跌停掩码(True代表触及涨跌停,不可交易)
+            codes: pd.Series - 股票代码序列 (可选，用于精确换手率计算)
             
         返回:
             FactorMetrics
@@ -95,26 +98,43 @@ class FactorEvaluator:
         if isinstance(returns, np.ndarray):
             returns = pd.Series(returns)
             
+        # A股特色: LULD 惩罚 (如果当天不可交易，该收益对因子评价无效或记为0)
+        # 此处我们将无法交易的样本收益强行抹平为0，惩罚追求极端连板票的因子
+        if luld_mask is not None:
+            returns = returns.copy()
+            returns.loc[luld_mask] = 0.0
+            
         # 去除NaN
         valid_mask = factor_values.notna() & returns.notna()
         factor_clean = factor_values[valid_mask]
         returns_clean = returns[valid_mask]
+        
+        # 必须同步切割 dates 和 codes，否则会导致长度不一致
+        if dates is not None:
+            dates_clean = dates[valid_mask] if isinstance(dates, (pd.Series, np.ndarray)) else np.array(dates)[valid_mask]
+        else:
+            dates_clean = None
+            
+        if codes is not None:
+            codes_clean = codes[valid_mask] if isinstance(codes, (pd.Series, np.ndarray)) else np.array(codes)[valid_mask]
+        else:
+            codes_clean = None
         
         if len(factor_clean) < 50:
             logger.warning(f"样本量过少 ({len(factor_clean)}), 评估不可靠")
             return FactorMetrics()
         
         # 1. IC指标
-        ic_metrics = self._calculate_ic_metrics(factor_clean, returns_clean, dates)
+        ic_metrics = self._calculate_ic_metrics(factor_clean, returns_clean, dates_clean)
         
-        # 2. 分组回测
-        group_metrics = self._calculate_group_returns(factor_clean, returns_clean)
+        # 2. 分组回测 (每日截面横向分组)
+        group_metrics = self._calculate_group_returns(factor_clean, returns_clean, dates_clean)
         
-        # 3. 稳定性指标
-        stability_metrics = self._calculate_stability(factor_clean, returns_clean, dates)
+        # 3. 稳定性指标 (按股票代码隔离)
+        stability_metrics = self._calculate_stability(factor_clean, returns_clean, dates_clean, codes_clean)
         
         # 4. 特异性
-        uniqueness = self._calculate_uniqueness(factor_clean, existing_factors)
+        uniqueness = self._calculate_uniqueness(factor_clean, existing_factors, dates_clean)
         
         # 合并所有指标
         all_metrics = {**ic_metrics, **group_metrics, **stability_metrics, 'factor_uniqueness': uniqueness}
@@ -159,14 +179,26 @@ class FactorEvaluator:
             'IC_positive_ratio': ic_positive_ratio
         }
     
-    def _calculate_group_returns(self, factor, returns, n_groups=5):
+    def _calculate_group_returns(self, factor, returns, dates=None, n_groups=5):
         """
         分组回测：将因子值分为n组，计算各组平均收益
         """
         df = pd.DataFrame({'factor': factor, 'returns': returns})
         
-        # 按因子值分组 (1=最低, n=最高)
-        df['group'] = pd.qcut(df['factor'], q=n_groups, labels=False, duplicates='drop') + 1
+        # 致命错误修复：必须使用每日截面做横向分组，否则全盘比较会导致时间穿越
+        if dates is not None:
+            df['date'] = dates
+            def _group(x):
+                if len(x) < n_groups:
+                    return pd.Series(np.nan, index=x.index)
+                return pd.qcut(x.rank(method='first'), q=n_groups, labels=False) + 1
+            df['group'] = df.groupby('date')['factor'].transform(_group)
+        else:
+            # Fallback
+            df['group'] = pd.qcut(df['factor'].rank(method='first'), q=n_groups, labels=False) + 1
+            
+        # 排除无法分组的数据
+        df = df.dropna(subset=['group'])
         
         # 计算各组平均收益
         group_rets = df.groupby('group')['returns'].mean()
@@ -184,15 +216,33 @@ class FactorEvaluator:
         group_5_ret = group_rets.iloc[-1] if len(group_rets) >= n_groups else 0.0  # 最高组
         long_short_ret = group_5_ret - group_1_ret
         
-        # 计算多空组合的Sharpe (简化版)
-        # 理想情况下应该用时序收益率序列计算，这里用单次收益估计
-        # Sharpe ~  E[R] / Std[R], 假设日度Sharpe
-        df['long_short'] = df['returns'] * (df['group'] == df['group'].max()).astype(float) - \
-                           df['returns'] * (df['group'] == df['group'].min()).astype(float)
-        
-        ls_mean = df['long_short'].mean()
-        ls_std = df['long_short'].std()
-        long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 0 else 0.0
+        # 致命错误修复：原本的计算方法是将每个股票明细展开，且大量中间组别的 returns 记为 0 参与整个 1D 数组的方差和均值计算，
+        # 导致方差被巨量稀释，Sharpe 会变得毫无意义。
+        # 正确的做法：先计算每天的多空对冲组合收益（即每天买Top组卖Bot组的平均净值），形成一条每日时间序列，再求该序列的Sharpe。
+        if dates is not None:
+            # 计算每天各组的平均收益
+            daily_group_rets = df.groupby(['date', 'group'])['returns'].mean().unstack()
+            
+            if n_groups in daily_group_rets.columns and 1 in daily_group_rets.columns:
+                # 每日多空组合收益 = 每日做多最高组 - 每日做空最低组
+                daily_ls_returns = daily_group_rets[n_groups] - daily_group_rets[1]
+                daily_ls_returns = daily_ls_returns.dropna()
+                
+                if len(daily_ls_returns) > 2:
+                    ls_mean = daily_ls_returns.mean()
+                    ls_std = daily_ls_returns.std()
+                    long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 0 else 0.0
+                else:
+                    long_short_sharpe = 0.0
+            else:
+                long_short_sharpe = 0.0
+        else:
+            # 无日期 fallback，采用简单均值（不精准）
+            df['long_short'] = df['returns'] * (df['group'] == df['group'].max()).astype(float) - \
+                               df['returns'] * (df['group'] == df['group'].min()).astype(float)
+            ls_mean = df['long_short'].mean()
+            ls_std = df['long_short'].std()
+            long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 0 else 0.0
         
         return {
             'group_1_ret': group_1_ret,
@@ -201,7 +251,7 @@ class FactorEvaluator:
             'long_short_sharpe': long_short_sharpe
         }
     
-    def _calculate_stability(self, factor, returns, dates=None):
+    def _calculate_stability(self, factor, returns, dates=None, codes=None):
         """
         计算因子稳定性：
         - IC衰减率 (未来N天IC的衰减)
@@ -211,41 +261,75 @@ class FactorEvaluator:
         # 如果没有dates，无法计算衰减
         ic_decay_rate = 0.0
         
-        # 换手率：因子排名变化
-        # 简化：计算因子值的自相关性，1-自相关 ~ 换手率
-        if len(factor) > 1:
+        # 致命漏洞修复：换手率必须同股票隔离计算
+        if len(factor) > 1 and codes is not None and dates is not None:
+            df = pd.DataFrame({'factor': factor, 'date': dates, 'code': codes})
+            # 隔离计算滞后期
+            df['factor_lag'] = df.groupby('code')['factor'].shift(1)
+            
+            def _turnover_corr(sub_df):
+                valid = sub_df.dropna(subset=['factor', 'factor_lag'])
+                if len(valid) > 10:
+                    return valid['factor'].corr(valid['factor_lag'], method='spearman')
+                return np.nan
+                
+            daily_corr = df.groupby('date').apply(_turnover_corr, include_groups=False).dropna()
+            if len(daily_corr) > 0:
+                turnover_corr = daily_corr.mean()
+                turnover = 1 - turnover_corr
+            else:
+                turnover = 0.5
+        elif len(factor) > 1:
+            # Fallback
             factor_lag = factor.shift(1)
             valid = factor.notna() & factor_lag.notna()
             if valid.sum() > 10:
                 turnover_corr = factor[valid].corr(factor_lag[valid])
                 turnover = 1 - turnover_corr if not np.isnan(turnover_corr) else 0.5
             else:
-                turnover = 0.5  # 默认
+                turnover = 0.5
         else:
             turnover = 0.5
-        
+            
         return {
             'IC_decay_rate': ic_decay_rate,
             'turnover': turnover
         }
     
-    def _calculate_uniqueness(self, factor, existing_factors):
+    def _calculate_uniqueness(self, factor, existing_factors, dates=None):
         """
         计算因子特异性：1 - max(corr(新因子, 已有因子))
         """
         if existing_factors is None or existing_factors.empty:
             return 1.0  #  完全独特
         
-        # 计算与所有已有因子的相关性
         correlations = []
-        for col in existing_factors.columns:
-            existing = existing_factors[col]
-            # 对齐索引
-            common_idx = factor.index.intersection(existing.index)
-            if len(common_idx) > 10:
-                corr = factor.loc[common_idx].corr(existing.loc[common_idx])
-                if not np.isnan(corr):
-                    correlations.append(abs(corr))
+        if dates is not None:
+            # 致命漏洞修复：使用独立每日时间的 Spearman 秩相关，防止受市场宏观大势同向带偏
+            df = pd.DataFrame({'new': factor, 'date': dates})
+            for col in existing_factors.columns:
+                df[col] = existing_factors[col]
+            
+            for col in existing_factors.columns:
+                def _daily_spearman(sub_df):
+                    if len(sub_df) < 5: return np.nan
+                    # 如果某日的子数组都是0或固定数值，Spearman 可能报 NaN 错，已被 pandas 隐式处理
+                    return sub_df['new'].corr(sub_df[col], method='spearman')
+                    
+                daily_corrs = df.groupby('date').apply(_daily_spearman, include_groups=False).dropna()
+                if len(daily_corrs) > 0:
+                    mean_corr = daily_corrs.mean()
+                    correlations.append(abs(mean_corr))
+        else:
+            # Fallback (1D Pearson)
+            for col in existing_factors.columns:
+                existing = existing_factors[col]
+                # 对齐索引
+                common_idx = factor.index.intersection(existing.index)
+                if len(common_idx) > 10:
+                    corr = factor.loc[common_idx].corr(existing.loc[common_idx])
+                    if not np.isnan(corr):
+                        correlations.append(abs(corr))
         
         if not correlations:
             return 1.0

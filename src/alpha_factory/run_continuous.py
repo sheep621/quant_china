@@ -50,11 +50,21 @@ def load_data():
         logger.warning(f"No existing parquet data found in {data_dir}! Calling DataLoader to fetch HS300 for real mining...")
         loader = DataLoader(data_dir=data_dir)
         if loader.login():
-            target_codes = loader.get_stock_list()
-            # 在 GitHub Actions 中时间有限，拉取 200 只代表性活跃股票即可跑通流程
-            target_codes = target_codes[:200]
-            start_date = (pd.Timestamp.now() - pd.Timedelta(days=365*3)).strftime("%Y-%m-%d")
-            end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+            from pandas.tseries.offsets import BDay
+            start_ts = pd.Timestamp.now() - pd.Timedelta(days=365*3)
+            # 必须退避到上一个工作日，否则周末/节假日 Baostock 无法拉取当天成分股
+            start_date = (start_ts - BDay(1)).strftime("%Y-%m-%d")
+            end_date = (pd.Timestamp.now() - BDay(1)).strftime("%Y-%m-%d")
+            
+            # 【致命漏洞修复：幸存者偏差】
+            # 防止回测只盯着今天存活的好股票导致过度乐观。合并期初(三年前)和期末(今天)的成分股。
+            codes_start = loader.get_stock_list(date=start_date)
+            codes_end = loader.get_stock_list(date=end_date)
+            
+            # 集合去重并截取
+            all_codes = list(set(codes_start + codes_end))
+            target_codes = sorted(all_codes)[:200]
+            
             logger.info(f"Downloading data for {len(target_codes)} stocks from {start_date} to {end_date}...")
             loader.update_data(target_codes, start_date, end_date)
             loader.logout()
@@ -133,18 +143,39 @@ def run_alpha_factory(iterations=3):
     
     # 准备特征 X 和标签 y
     # 移除非特征列
-    exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'tradestatus']
+    exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
     feature_cols = [c for c in df_clean.columns if c not in exclude_cols]
     
     X = df_clean[feature_cols]
     y = df_clean['label']
     
-    # 简单的 train/test split (滚动训练逻辑可在外层做, 这里演示单次)
-    # 假设最后20%做验证
-    split_idx = int(len(df_clean) * 0.8)
-    X_train, y_train = X.iloc[:split_idx], y.iloc[:split_idx]
+    # 获取涨跌停掩码 (LULD Mask: 如果T+1天涨停买不到或者T+2天跌停卖不出，视为不可交易)
+    # 【致命漏洞四修复】：基于时空平移的截获
+    if 'next_is_limit_up' in df_clean.columns and 'next_2_is_limit_down' in df_clean.columns:
+        luld_mask = df_clean['next_is_limit_up'] | df_clean['next_2_is_limit_down']
+    else:
+        luld_mask = pd.Series(False, index=df_clean.index)
+        
+    # 基于日期 (而非单纯的行数) 构建无未来函数的训练/测试切分
+    # 按照时间序列切出前 80% 的日期作为训练集
+    unique_dates = df_clean['date'].sort_values().unique()
+    split_date_idx = int(len(unique_dates) * 0.8)
+    if split_date_idx == 0:
+        split_date = unique_dates[-1]  # 数据太少时 fallback
+    else:
+        split_date = unique_dates[split_date_idx]
+        
+    train_mask = df_clean['date'] < split_date
+    X_train = X[train_mask]
+    y_train = y[train_mask]
+    
+    # 获取 codes, dates 和 luld_mask 供引擎隔离数据 (应用 train_mask)
+    codes_train = df_clean['code'][train_mask].values
+    dates_train = df_clean['date'][train_mask].values
+    luld_train = luld_mask[train_mask]
     
     logger.info(f"Training Data: {X_train.shape}")
+
     
     # 2. Initialize Generator
     generator = AlphaGenerator(
@@ -173,8 +204,14 @@ def run_alpha_factory(iterations=3):
         logger.info(f"--- Iteration {current_iter}/{'Infinite' if iterations == -1 else iterations} ---")
         
         # Fit (Warm Start enabled)
-        # 支持传入 feature_names 方便生成公式可读
-        candidates = generator.fit(X_train, y_train, feature_names=feature_cols)
+        # 支持传入 feature_names 及上下文以彻底隔离时序数据污染
+        candidates = generator.fit(
+            X_train, y_train, 
+            feature_names=feature_cols, 
+            codes=codes_train, 
+            dates=dates_train
+        )
+
         
         # 4. Evaluate & Filter with Quality Gates
         for idx, alpha in enumerate(candidates):
@@ -186,17 +223,24 @@ def run_alpha_factory(iterations=3):
                 continue
             
             try:
-                # 计算因子值
-                factor_values = generator.transform(X_train)
+                # 计算因子值 (传入 codes 和 dates 防数据污染)
+                factor_values = generator.transform(
+                    X_train,
+                    codes=codes_train,
+                    dates=dates_train
+                )
                 if factor_values.shape[1] <= idx:
                     continue
                 factor_series = pd.Series(factor_values[:, idx], index=X_train.index)
                 
-                # 质量评估
+                # 质量评估 (修复ICIR计算bug:透传dates及codes)
                 metrics = evaluator.evaluate(
                     factor_series, 
                     y_train,
-                    existing_factors=factor_pool
+                    dates=dates_train,
+                    codes=codes_train,
+                    existing_factors=factor_pool,
+                    luld_mask=luld_train
                 )
                 
                 # 质量门控检查
@@ -209,7 +253,7 @@ def run_alpha_factory(iterations=3):
                 # 正交性检查
                 if not factor_pool.empty:
                     is_unique, max_corr, most_similar = orthogonalizer.incremental_deduplication(
-                        factor_series, factor_pool
+                        factor_series, factor_pool, dates=dates_train
                     )
                     if not is_unique:
                         logger.info(f"Alpha rejected (high correlation): {formula[:50]}...")
