@@ -76,13 +76,23 @@ class DataLoader:
         # Fields: date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST
         fields = "date,code,open,high,low,close,volume,amount,adjustflag,turn,tradestatus,pctChg,isST"
         
-        rs = bs.query_history_k_data_plus(code,
-            fields,
-            start_date=start_date, end_date=end_date,
-            frequency="d", adjustflag="1")
+        # 添加带指数退避的重试机制，应对[Errno 32] Broken pipe
+        max_retries = 3
+        for attempt in range(max_retries):
+            rs = bs.query_history_k_data_plus(code,
+                fields,
+                start_date=start_date, end_date=end_date,
+                frequency="d", adjustflag="1")
+                
+            if rs.error_code == '0':
+                break
             
+            logger.warning(f"Attempt {attempt+1}/{max_retries} failed for {code}: {rs.error_msg}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt) # 指数退避: 1s, 2s...
+        
         if rs.error_code != '0':
-            logger.warning(f"query_history_k_data_plus failed for {code}: {rs.error_msg}")
+            logger.error(f"query_history_k_data_plus finally failed for {code}: {rs.error_msg}")
             return None
             
         data_list = []
@@ -131,6 +141,8 @@ class DataLoader:
                     pass
             
             try:
+                # 增加请求微小间隔，防止瞬间打爆baostock服务
+                time.sleep(0.5)
                 # Fetch
                 df = self.fetch_daily_data(code, start_date, end_date)
                 if df is not None and not df.empty:
@@ -144,10 +156,10 @@ class DataLoader:
                 if (success_count + skipped_count) % 100 == 0:
                     logger.info(f"Progress: {success_count + skipped_count}/{len(codes)} (Success: {success_count}, Skipped: {skipped_count})")
 
-        # Use ThreadPoolExecutor for concurrency
-        # max_workers=5 to avoid hitting BaoStock rate limits or connection errors
-        max_workers = 10 
-        logger.info(f"Using {max_workers} threads...")
+        # 修改并发数以适应免费数据接口的限制
+        # max_workers=10 容易导致baostock报 broken pipe 或者 reset
+        max_workers = 3 
+        logger.info(f"Using {max_workers} threads to be gentle on Baostock servers...")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_process_single_stock, code) for code in codes]
