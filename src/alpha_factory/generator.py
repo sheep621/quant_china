@@ -7,7 +7,7 @@ from src.alpha_factory.operators import custom_operations
 logger = get_system_logger()
 
 class AlphaGenerator:
-    def __init__(self, population_size=1000, generations=20, n_jobs=1, warm_start=False):
+    def __init__(self, population_size=1000, generations=20, n_jobs=1, warm_start=False, checkpoint_path=None):
         """
         优化后的Alpha生成器
         
@@ -48,6 +48,11 @@ class AlphaGenerator:
             n_jobs=n_jobs
         )
         self.feature_names = None
+        self.checkpoint_path = checkpoint_path
+        
+        # 尝试加载增量断点
+        if self.gp.warm_start and self.checkpoint_path:
+            self._load_checkpoint()
         
     def fit(self, X, y, feature_names=None):
         """
@@ -108,3 +113,34 @@ class AlphaGenerator:
             X_clean = np.nan_to_num(X)
             
         return self.gp.transform(X_clean)
+
+    def _load_checkpoint(self):
+        """加载历史种群，实现断点续训"""
+        if not self.checkpoint_path or not os.path.exists(self.checkpoint_path):
+            return
+            
+        import joblib
+        try:
+            saved_gp = joblib.load(self.checkpoint_path)
+            # 恢复内部关键状态
+            if hasattr(saved_gp, '_programs'):
+                self.gp._programs = saved_gp._programs
+                self.gp._best_programs = getattr(saved_gp, '_best_programs', [])
+                self.gp.run_details_ = getattr(saved_gp, 'run_details_', {})
+                logger.info(f"Checkpoint loaded from {self.checkpoint_path} with {len(self.gp._programs)} generations.")
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint from {self.checkpoint_path}: {e}")
+
+    def save_checkpoint(self):
+        """保存当前种群状态供下次启动"""
+        if not self.checkpoint_path:
+            return
+            
+        import joblib
+        import os
+        try:
+            os.makedirs(os.path.dirname(self.checkpoint_path), exist_ok=True)
+            joblib.dump(self.gp, self.checkpoint_path)
+            logger.info(f"Checkpoint saved to {self.checkpoint_path}")
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")

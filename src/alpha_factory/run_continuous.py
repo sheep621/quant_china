@@ -21,38 +21,85 @@ OUTPUT_DIR = r'd:\24267\quant_china\output'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_data():
-    """加载数据，如果不存在则生成Mock数据用于测试"""
-    if os.path.exists(DATA_PATH):
-        logger.info(f"Loading data from {DATA_PATH}")
-        df = pd.read_csv(DATA_PATH)
-        # 确保日期格式
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
-        return df
-    else:
-        logger.warning("Data file not found, generating MOCK data for system test...")
-        dates = pd.date_range(start='2023-01-01', periods=100)
-        codes = [f'sh.600{i:03d}' for i in range(10)]
-        data = []
-        for date in dates:
-            for code in codes:
-                row = {
-                    'date': date,
-                    'code': code,
-                    'open': 10 + np.random.randn(),
-                    'close': 10 + np.random.randn(),
-                    'high': 11 + np.random.randn(),
-                    'low': 9 + np.random.randn(),
-                    'volume': 1000 + abs(np.random.randn() * 100),
-                    'amount': 10000 + abs(np.random.randn() * 1000),
-                    'preClose': 10.0,
-                    'pctChg': np.random.randn() * 0.05,
-                    'turn': np.random.rand() * 0.1,
-                    'isST': 0,
-                    'tradestatus': '1'
-                }
-                data.append(row)
-        return pd.DataFrame(data)
+    """加载真实数据，如果不存在则自动下载（优先读取Parquet）"""
+    import glob
+    # 定位到位于项目根目录下的 data/raw
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    data_dir = os.path.join(project_root, "data", "raw")
+    files = glob.glob(os.path.join(data_dir, "*.parquet"))
+    
+    # 1. 优先读取已有的 Parquet 文件
+    if files:
+        logger.info(f"Loading {len(files)} real stocks data from {data_dir}...")
+        df_list = []
+        for f in files:
+            try:
+                df = pd.read_parquet(f)
+                df_list.append(df)
+            except Exception:
+                pass
+        if df_list:
+            full_df = pd.concat(df_list, ignore_index=True)
+            if 'date' in full_df.columns:
+                full_df['date'] = pd.to_datetime(full_df['date'])
+            return full_df
+
+    # 2. 如果没有读取到，尝试调用 DataLoader 下载沪深300作为真实数据源
+    try:
+        from src.data_engine.loader import DataLoader
+        logger.warning(f"No existing parquet data found in {data_dir}! Calling DataLoader to fetch HS300 for real mining...")
+        loader = DataLoader(data_dir=data_dir)
+        if loader.login():
+            target_codes = loader.get_stock_list()
+            # 在 GitHub Actions 中时间有限，拉取 200 只代表性活跃股票即可跑通流程
+            target_codes = target_codes[:200]
+            start_date = (pd.Timestamp.now() - pd.Timedelta(days=365*3)).strftime("%Y-%m-%d")
+            end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+            logger.info(f"Downloading data for {len(target_codes)} stocks from {start_date} to {end_date}...")
+            loader.update_data(target_codes, start_date, end_date)
+            loader.logout()
+            
+            # 再试一次读取下载后的数据
+            files = glob.glob(os.path.join(data_dir, "*.parquet"))
+            df_list = []
+            for f in files:
+                try:
+                    df = pd.read_parquet(f)
+                    df_list.append(df)
+                except Exception:
+                    pass
+            if df_list:
+                full_df = pd.concat(df_list, ignore_index=True)
+                if 'date' in full_df.columns:
+                    full_df['date'] = pd.to_datetime(full_df['date'])
+                return full_df
+    except Exception as e:
+        logger.error(f"Auto-download failed: {e}")
+
+    # 3. 如果所有手段均失败，生成 Mock 数据兜底系统测试
+    logger.warning("Data fallback failed! Generating MOCK data for system test...")
+    dates = pd.date_range(start='2023-01-01', periods=100)
+    codes = [f'sh.600{i:03d}' for i in range(10)]
+    data = []
+    for date in dates:
+        for code in codes:
+            row = {
+                'date': date,
+                'code': code,
+                'open': 10 + np.random.randn(),
+                'close': 10 + np.random.randn(),
+                'high': 11 + np.random.randn(),
+                'low': 9 + np.random.randn(),
+                'volume': 1000 + abs(np.random.randn() * 100),
+                'amount': 10000 + abs(np.random.randn() * 1000),
+                'preClose': 10.0,
+                'pctChg': np.random.randn() * 0.05,
+                'turn': np.random.rand() * 0.1,
+                'isST': 0,
+                'tradestatus': '1'
+            }
+            data.append(row)
+    return pd.DataFrame(data)
 
 def orthogonality_check(new_alpha_scores, existing_alphas_scores, threshold=0.7):
     """
@@ -104,7 +151,8 @@ def run_alpha_factory(iterations=3):
         population_size=500, # 演示用小一点
         generations=5,
         n_jobs=1,
-        warm_start=True
+        warm_start=True,
+        checkpoint_path=os.path.join(OUTPUT_DIR, 'population_checkpoint.pkl')
     )
     
     hall_of_fame = [] # 存放 (formula, fitness, metrics)
@@ -192,7 +240,10 @@ def run_alpha_factory(iterations=3):
         with open(output_file, 'w') as f:
             json.dump(hall_of_fame, f, indent=4)
         logger.info(f"Saved {len(hall_of_fame)} unique alphas to {output_file}")
-            
+        
+        # 保存整个模型的记忆断点，用于下次增量挖掘
+        generator.save_checkpoint()
+
     logger.info("Alpha Factory Stopped.")
 
 if __name__ == "__main__":
