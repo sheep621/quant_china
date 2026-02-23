@@ -33,7 +33,8 @@ class LGBMTrainer:
             logger.error("Training data is empty")
             return None
         
-        # Prepare datasets
+        # Prepare datasets (Drop rows where label is missing, otherwise LGBM will crash or learn noise)
+        df_train = df_train.dropna(subset=[label])
         X_train = df_train[features]
         y_train = df_train[label]
         
@@ -95,8 +96,8 @@ class LGBMTrainer:
             train_mask = df['date'] < train_split_date
             val_mask = (df['date'] >= split_date) & (df['date'] < test_end_date)
             
-            df_train_fold = df[train_mask]
-            df_val_fold = df[val_mask]
+            df_train_fold = df[train_mask].dropna(subset=[label])
+            df_val_fold = df[val_mask].dropna(subset=[label])
             
             if df_train_fold.empty or df_val_fold.empty: continue
             

@@ -180,13 +180,22 @@ def _ts_std_20(x1):
 
 # 新增高阶时序特征: EWMA (指数移动平均 - 对近期价格极其敏感)
 def _ewma_5(x1):
-    return pd.Series(x1).ewm(span=5, adjust=False).mean().fillna(0).values
+    codes = DataContext.get_codes()
+    s = pd.Series(x1)
+    if codes is None: return s.ewm(span=5, adjust=False).mean().fillna(0).values
+    return s.groupby(codes, sort=False).transform(lambda x: x.ewm(span=5, adjust=False).mean()).fillna(0).values
 
 def _ewma_10(x1):
-    return pd.Series(x1).ewm(span=10, adjust=False).mean().fillna(0).values
+    codes = DataContext.get_codes()
+    s = pd.Series(x1)
+    if codes is None: return s.ewm(span=10, adjust=False).mean().fillna(0).values
+    return s.groupby(codes, sort=False).transform(lambda x: x.ewm(span=10, adjust=False).mean()).fillna(0).values
 
 def _ewma_20(x1):
-    return pd.Series(x1).ewm(span=20, adjust=False).mean().fillna(0).values
+    codes = DataContext.get_codes()
+    s = pd.Series(x1)
+    if codes is None: return s.ewm(span=20, adjust=False).mean().fillna(0).values
+    return s.groupby(codes, sort=False).transform(lambda x: x.ewm(span=20, adjust=False).mean()).fillna(0).values
 
 # 新增高阶时序特征: Ts_Zscore (时序标准化 - 极其重要的均值回归指标)
 def _ts_zscore_5(x1):
@@ -337,6 +346,9 @@ def custom_make_function(function, name, arity):
         m = re.search(r'_(\d+)$', function.__name__)
         if m:
             window = int(m.group(1))
+            # 修复时序算子跨股票偏移泄露 BUG: delay, delta, return 需要跨跃过去的 N 天，意味着涉及 N+1 天的数据周期
+            if any(k in function.__name__ for k in ['delay', 'delta', 'return']):
+                window += 1
             if arity == 1:
                 def wrapper(x1):
                     res = function(x1)

@@ -143,36 +143,39 @@ def run_alpha_factory(iterations=3):
     df_clean = cleaner.process_daily_data(df)
     
     # 准备特征 X 和标签 y
+    # 将包含 NaN label 的行剔除，否则 GP 引擎会强行将它充当 0.0 给矿机拟合，形成噪音污染
+    df_clean_mining = df_clean.dropna(subset=['label'])
+    
     # 移除非特征列
     exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
-    feature_cols = [c for c in df_clean.columns if c not in exclude_cols]
+    feature_cols = [c for c in df_clean_mining.columns if c not in exclude_cols]
     
-    X = df_clean[feature_cols]
-    y = df_clean['label']
+    X = df_clean_mining[feature_cols]
+    y = df_clean_mining['label']
     
     # 获取涨跌停掩码 (LULD Mask: 如果T+1天涨停买不到或者T+2天跌停卖不出，视为不可交易)
     # 【致命漏洞四修复】：基于时空平移的截获
-    if 'next_is_limit_up' in df_clean.columns and 'next_2_is_limit_down' in df_clean.columns:
-        luld_mask = df_clean['next_is_limit_up'] | df_clean['next_2_is_limit_down']
+    if 'next_is_limit_up' in df_clean_mining.columns and 'next_2_is_limit_down' in df_clean_mining.columns:
+        luld_mask = df_clean_mining['next_is_limit_up'] | df_clean_mining['next_2_is_limit_down']
     else:
-        luld_mask = pd.Series(False, index=df_clean.index)
+        luld_mask = pd.Series(False, index=df_clean_mining.index)
         
     # 基于日期 (而非单纯的行数) 构建无未来函数的训练/测试切分
     # 按照时间序列切出前 80% 的日期作为训练集
-    unique_dates = df_clean['date'].sort_values().unique()
+    unique_dates = df_clean_mining['date'].sort_values().unique()
     split_date_idx = int(len(unique_dates) * 0.8)
     if split_date_idx == 0:
         split_date = unique_dates[-1]  # 数据太少时 fallback
     else:
         split_date = unique_dates[split_date_idx]
         
-    train_mask = df_clean['date'] < split_date
+    train_mask = df_clean_mining['date'] < split_date
     X_train = X[train_mask]
     y_train = y[train_mask]
     
     # 获取 codes, dates 和 luld_mask 供引擎隔离数据 (应用 train_mask)
-    codes_train = df_clean['code'][train_mask].values
-    dates_train = df_clean['date'][train_mask].values
+    codes_train = df_clean_mining['code'][train_mask].values
+    dates_train = df_clean_mining['date'][train_mask].values
     luld_train = luld_mask[train_mask]
     
     logger.info(f"Training Data: {X_train.shape}")
