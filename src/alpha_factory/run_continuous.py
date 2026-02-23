@@ -183,9 +183,9 @@ def run_alpha_factory(iterations=3):
     
     # 2. Initialize Generator
     generator = AlphaGenerator(
-        population_size=500, # 演示用小一点
+        population_size=1000, # 扩容：因为运算提速了，增加候选基数
         generations=5,
-        n_jobs=1,
+        n_jobs=-1, # 极限提速：榨干双核/多核CPU的所有算力
         warm_start=True,
         checkpoint_path=os.path.join(OUTPUT_DIR, 'population_checkpoint.pkl')
     )

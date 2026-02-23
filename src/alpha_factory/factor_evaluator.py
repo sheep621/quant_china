@@ -170,7 +170,7 @@ class FactorEvaluator:
             ic_positive_ratio = 1.0 if ic > 0 else 0.0
         
         # ICIR = IC_mean / IC_std
-        icir = ic_mean / ic_std if ic_std > 0 else 0.0
+        icir = ic_mean / ic_std if ic_std > 1e-6 else 0.0
         
         return {
             'IC_mean': ic_mean,
@@ -231,7 +231,7 @@ class FactorEvaluator:
                 if len(daily_ls_returns) > 2:
                     ls_mean = daily_ls_returns.mean()
                     ls_std = daily_ls_returns.std()
-                    long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 0 else 0.0
+                    long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 1e-6 else 0.0
                 else:
                     long_short_sharpe = 0.0
             else:
@@ -242,7 +242,7 @@ class FactorEvaluator:
                                df['returns'] * (df['group'] == df['group'].min()).astype(float)
             ls_mean = df['long_short'].mean()
             ls_std = df['long_short'].std()
-            long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 0 else 0.0
+            long_short_sharpe = (ls_mean / ls_std * np.sqrt(252)) if ls_std > 1e-6 else 0.0
         
         return {
             'group_1_ret': group_1_ret,

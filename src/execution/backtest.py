@@ -168,7 +168,7 @@ class Backtester:
         # 4. Sharpe
         mean_ret = df['return'].mean()
         std_ret = df['return'].std()
-        if std_ret == 0:
+        if std_ret < 1e-6:
             sharpe = 0
         else:
             sharpe = mean_ret / std_ret * np.sqrt(252)
