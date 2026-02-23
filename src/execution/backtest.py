@@ -73,8 +73,10 @@ class Backtester:
         shares = self.positions.get(code, 0)
         if shares > 0:
             # 必须且只能在 T+1 开盘价成交以杜绝未来函数
-            price = market_data.get('next_open', market_data['close'])
-            if pd.isna(price) or price <= 0: return
+            if 'next_open' not in market_data or pd.isna(market_data['next_open']) or market_data['next_open'] <= 0:
+                logger.debug(f"{code} is missing next_open. Cannot sell.")
+                return
+            price = market_data['next_open']
             # Slippage: Sell lower
             exec_price = price * (1 - 0.001)  # 0.1% slippage
             amount = shares * exec_price
@@ -91,8 +93,10 @@ class Backtester:
             
         target_amt = total_asset * target_weight
         # 必须在 T+1 的开盘成交
-        price = market_data.get('next_open', market_data['close'])
-        if pd.isna(price) or price <= 0: return
+        if 'next_open' not in market_data or pd.isna(market_data['next_open']) or market_data['next_open'] <= 0:
+            logger.debug(f"{code} is missing next_open. Cannot buy.")
+            return
+        price = market_data['next_open']
         
         # Already hold?
         if code in self.positions:
@@ -108,10 +112,17 @@ class Backtester:
         cost = shares * exec_price
         fee = cost * 0.0002 # Comm (0.02%) No Stamp Tax on Buy
         
-        if self.cash >= (cost + fee):
-            self.cash -= (cost + fee)
-            self.positions[code] = shares
-            self.locked_positions[code] = shares
+        # 如果资金不足，重新计算最大可买入股数，而不是直接放弃交易
+        if self.cash < cost + fee:
+            max_shares = int(self.cash / (exec_price * 1.0002) / 100) * 100
+            if max_shares == 0: return
+            shares = max_shares
+            cost = shares * exec_price
+            fee = cost * 0.0002
+            
+        self.cash -= (cost + fee)
+        self.positions[code] = shares
+        self.locked_positions[code] = shares
             
     def get_total_asset(self, daily_data_dict):
         mkt_val = 0

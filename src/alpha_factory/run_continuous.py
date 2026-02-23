@@ -16,8 +16,9 @@ from src.infrastructure.logger import get_system_logger
 logger = get_system_logger()
 
 # 配置
-DATA_PATH = r'd:\24267\quant_china\data\market_data.csv' # 假设数据路径
-OUTPUT_DIR = r'd:\24267\quant_china\output'
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA_PATH = os.path.join(project_root, 'data', 'market_data.csv')
+OUTPUT_DIR = os.path.join(project_root, 'output')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_data():

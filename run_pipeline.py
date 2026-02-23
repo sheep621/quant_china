@@ -50,15 +50,18 @@ class QuantPipeline:
             
         logger.info(f"Loading {len(files)} files...")
         for f in files:
-            df = pd.read_parquet(f)
-            df = self.cleaner.process_daily_data(df)
-            if df is not None:
+            try:
+                df = pd.read_parquet(f)
                 all_dfs.append(df)
+            except Exception as e:
+                logger.warning(f"Failed to load {f}: {e}")
                 
         if not all_dfs:
             return None
             
         full_df = pd.concat(all_dfs, ignore_index=True)
+        # Apply cleaner on the combined dataframe to enable cross-sectional operations (e.g. Rank, MAD)
+        full_df = self.cleaner.process_daily_data(full_df)
         return full_df
 
     def train_model(self):
@@ -69,8 +72,9 @@ class QuantPipeline:
         # We need to drop rows where label is NaN for training
         df_mining = df.dropna(subset=['label'])
         
-        # Base features for mining
-        base_features = ['turn', 'pctChg', 'volume', 'amount', 'open', 'close', 'high', 'low']
+        # Extract features dynamically to avoid discarding new cleaned features (MAD, Rank, etc.)
+        exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
+        base_features = [c for c in df_mining.columns if c not in exclude_cols]
         X_mining = df_mining[base_features]
         y_mining = df_mining['label']
         

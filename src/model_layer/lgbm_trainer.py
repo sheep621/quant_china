@@ -88,9 +88,11 @@ class LGBMTrainer:
             if test_end_idx > n_dates: break
             
             split_date = dates[train_end_idx]
+            # 引入 2天 embargo 防止 T+2 标签泄漏
+            train_split_date = dates[max(0, train_end_idx - 2)]
             test_end_date = dates[min(test_end_idx, n_dates-1)]
             
-            train_mask = df['date'] < split_date
+            train_mask = df['date'] < train_split_date
             val_mask = (df['date'] >= split_date) & (df['date'] < test_end_date)
             
             df_train_fold = df[train_mask]

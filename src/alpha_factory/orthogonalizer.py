@@ -239,7 +239,7 @@ def batch_filter_factors(factors_dict,threshold=0.7, method='incremental'):
             existing_df = pd.DataFrame(filtered_dict)
             
             is_unique, max_corr, most_similar = orthogonalizer.incremental_deduplication(
-                factor_values, existing_df, threshold
+                factor_values, existing_df, threshold=threshold
             )
             
             if is_unique:
