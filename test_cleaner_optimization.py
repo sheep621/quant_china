@@ -64,8 +64,9 @@ def test_cleaner_logic():
             'code': code, 
             'pctChg': chg,
             'isST': st,
-            'tradeStatus': '1',
-            'open': 10, 'close': 10, 'high': 10, 'low': 10, 'volume': 100, 'amount': 1000, 'turn': 1
+            'expected_limit_up': exp,
+            'tradestatus': '1',
+            'open': 10, 'preClose': 10, 'close': round(10 * (1 + chg/100.0), 2), 'high': round(10 * (1 + chg/100.0), 2), 'low': 10, 'volume': 100, 'amount': 1000, 'turn': 1
         })
         
     df_limit = pd.DataFrame(rows)
@@ -77,7 +78,7 @@ def test_cleaner_logic():
     print(f"{'Code':<10} {'Pct':<5} {'ST':<3} {'Exp':<5} {'Act':<5} {'Result'}")
     all_pass = True
     for i, row in processed_df.iterrows():
-        exp = test_cases[i][3]
+        exp = row['expected_limit_up']
         act = row['is_limit_up']
         res = "PASS" if exp == act else "FAIL"
         if res == "FAIL": all_pass = False

@@ -214,7 +214,7 @@ class Orthogonalizer:
             return orthogonal_factors
 
 
-def batch_filter_factors(factors_dict,threshold=0.7, method='incremental'):
+def batch_filter_factors(factors_dict, threshold=0.7, method='incremental', dates=None):
     """
     批量过滤因子，去除高相关因子
     
@@ -243,7 +243,7 @@ def batch_filter_factors(factors_dict,threshold=0.7, method='incremental'):
             existing_df = pd.DataFrame(filtered_dict)
             
             is_unique, max_corr, most_similar = orthogonalizer.incremental_deduplication(
-                factor_values, existing_df, threshold=threshold
+                factor_values, existing_df, dates=dates, threshold=threshold
             )
             
             if is_unique:

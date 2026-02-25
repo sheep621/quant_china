@@ -54,7 +54,7 @@ class TestOptimizations(unittest.TestCase):
         # Slippage: Buy at price * 1.001
         # Price=10.0, Exec=10.01. Buy 100 shares = 1001.0
         # Cost+Fee.
-        market_data_1 = {'close': 10.0, 'is_limit_up': False}
+        market_data_1 = {'close': 10.0, 'next_open': 10.0, 'is_limit_up': False, 'next_is_limit_up': False}
         tester._buy('TEST', 0.5, market_data_1, 10000)
         
         # Check positions

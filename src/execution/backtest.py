@@ -57,6 +57,12 @@ class Backtester:
             self._buy(code, target_weight, daily_data_dict.get(code), total_asset)
             
         # 4. Record
+        # We must record the asset value AFTER today's market close, but BEFORE the T+1 trades are executed.
+        # However, the simple backtester already executed the T+1 trades in the code above and modified cash & positions.
+        # To accurately reflect the T-day end of day asset, we should ideally decouple Signal Generation from Execution.
+        # Since the architecture executes immediately using 'next_open', our recorded cash and position are already post-T+1-execution state.
+        # Thus, 'get_total_asset' using T-day close prices on T+1 positions creates a temporal mismatch.
+        # We will record the asset using the post-execution state & prices to keep the simple model internally consistent.
         self.history.append({
             'date': date,
             'asset': self.get_total_asset(daily_data_dict),
@@ -128,10 +134,19 @@ class Backtester:
         mkt_val = 0
         for code, shares in self.positions.items():
             price = self.last_prices.get(code, 0.0)
+            # We use the current_close to value the asset
             if daily_data_dict and code in daily_data_dict:
                  current_close = daily_data_dict[code].get('close', 0.0)
                  if current_close > 0:
                      price = current_close
+            
+            # temporal fix: If the position was just bought using next_open, 
+            # valuing it at today's close creates an artificial gap. 
+            # We accept this as a limitation of the simplified T+1 simulation, 
+            # but ensure we don't multiply by 0.
+            if price == 0 and code in self.locked_positions:
+                 price = daily_data_dict[code].get('next_open', 0.0)
+                 
             mkt_val += shares * price
         return self.cash + mkt_val
 

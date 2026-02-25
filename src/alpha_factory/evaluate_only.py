@@ -45,8 +45,8 @@ def run_evaluation():
     codes = df_clean['code'].values
     dates = df_clean['date'].values
     
-    if 'is_limit_up' in df_clean.columns and 'is_limit_down' in df_clean.columns:
-        luld_mask = df_clean['is_limit_up'] | df_clean['is_limit_down']
+    if 'next_is_limit_up' in df_clean.columns and 'next_2_is_limit_down' in df_clean.columns:
+        luld_mask = df_clean['next_is_limit_up'] | df_clean['next_2_is_limit_down']
     else:
         luld_mask = pd.Series(False, index=df_clean.index)
         
