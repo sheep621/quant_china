@@ -70,11 +70,15 @@ class Orthogonalizer:
         try:
             eigvals, eigvecs = np.linalg.eigh(S)
             
-            # 处理小特征值 (避免数值不稳定)
-            eigvals_safe = np.maximum(eigvals, 1e-10)
+            # --- FIX: Avoid Numerical Explosion for highly collinear factors ---
+            # Instead of np.maximum which boosts near-zero eigenvalues by 10^5,
+            # we mask them out entirely.
+            inv_sqrt = np.zeros_like(eigvals)
+            valid_mask = eigvals > 1e-7
+            inv_sqrt[valid_mask] = 1.0 / np.sqrt(eigvals[valid_mask])
             
             # S^(-1/2) = V * diag(lambda^(-1/2)) * V^T
-            S_inv_sqrt = eigvecs @ np.diag(1.0 / np.sqrt(eigvals_safe)) @ eigvecs.T
+            S_inv_sqrt = eigvecs @ np.diag(inv_sqrt) @ eigvecs.T
             
             # 3. 正交因子 = F * S^(-1/2)
             orthogonal_factors = factor_values @ S_inv_sqrt

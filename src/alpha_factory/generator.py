@@ -26,13 +26,13 @@ fast_ic_metric = make_fitness(function=_fast_spearman, greater_is_better=True)
 logger = get_system_logger()
 
 class AlphaGenerator:
-    def __init__(self, population_size=1000, generations=20, n_jobs=1, warm_start=False, checkpoint_path=None):
+    def __init__(self, population_size=200, generations=5, n_jobs=1, warm_start=False, checkpoint_path=None):
         """
         优化后的Alpha生成器
         
         关键改进(基于研究文档):
-        1. Population: 1000 (扩大搜索空间)
-        2. Generations: 20 (充分进化)
+        1. Population: 200 (由于服务器算力极大受限，被迫大幅缩小搜索空间防超时)
+        2. Generations: 5 (保证在 GitHub Actions 的免费机器上30分钟内必能跑完)
         3. Parsimony: 0.01 (强力防止Bloat过拟合)
         4. Support Warm Start (支持持续进化)
         """
@@ -42,8 +42,8 @@ class AlphaGenerator:
         self.gp = SymbolicTransformer(
             generations=generations,
             population_size=population_size,
-            hall_of_fame=100,  # TOP 100保留
-            n_components=20,    # 输出20个最佳Alpha
+            hall_of_fame=20,  # 缩小名人堂
+            n_components=10,  # 输出10个最佳Alpha
             
             # === 核心配置 ===
             function_set=function_set,

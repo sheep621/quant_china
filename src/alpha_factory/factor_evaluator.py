@@ -102,7 +102,12 @@ class FactorEvaluator:
         # 此处我们将无法交易的样本收益强行抹平为0，惩罚追求极端连板票的因子
         if luld_mask is not None:
             returns = returns.copy()
-            returns.loc[luld_mask] = 0.0
+            # --- FIX: Use .values to avoid index misalignment mismatch ---
+            mask_vals = luld_mask.values if hasattr(luld_mask, 'values') else np.array(luld_mask)
+            if len(mask_vals) == len(returns):
+                returns.loc[mask_vals] = 0.0
+            else:
+                logger.warning("luld_mask length does not match returns, skipping LULD penalty.")
             
         # 去除NaN
         valid_mask = factor_values.notna() & returns.notna()

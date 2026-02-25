@@ -60,6 +60,16 @@ class QuantPipeline:
             return None
             
         full_df = pd.concat(all_dfs, ignore_index=True)
+        
+        # --- FIX: Time Filter to drastically reduce GP/Training workload on CI ---
+        # Instead of crunching 10+ years of full market data, we slice the last 2 years.
+        if 'date' in full_df.columns:
+            full_df['date'] = pd.to_datetime(full_df['date'])
+            max_date = full_df['date'].max()
+            cutoff_date = max_date - pd.DateOffset(years=2)
+            full_df = full_df[full_df['date'] >= cutoff_date]
+            logger.info(f"Sliced data to > {cutoff_date.date()} for faster CI Execution. Total rows: {len(full_df)}")
+        
         # Apply cleaner on the combined dataframe to enable cross-sectional operations (e.g. Rank, MAD)
         full_df = self.cleaner.process_daily_data(full_df)
         return full_df
@@ -68,11 +78,23 @@ class QuantPipeline:
         df = self.build_dataset()
         if df is None: return
         
-        # Feature Engineering: Use AlphaGenerator
-        # We need to drop rows where label is NaN for training
-        df_mining = df.dropna(subset=['label'])
+        # --- FIX: Time-based Split MUST be done BEFORE Alpha Mining ---
+        logger.info("Splitting Train/Val dataset to prevent Look-Ahead Bias...")
+        dates = df['date'].unique()
+        if hasattr(dates, 'to_numpy'):
+             dates = dates.to_numpy()
+        dates.sort()
+        split_idx = int(len(dates) * 0.8)
+        split_date = dates[split_idx]
         
-        # Extract features dynamically to avoid discarding new cleaned features (MAD, Rank, etc.)
+        df_train_raw = df[df['date'] < split_date].copy()
+        df_val_raw   = df[df['date'] >= split_date].copy()
+        logger.info(f"Training on {len(df_train_raw)} rows, Val on {len(df_val_raw)} rows")
+        
+        # Feature Engineering: Use AlphaGenerator only on TRAIN set
+        df_mining = df_train_raw.dropna(subset=['label'])
+        
+        # Extract features dynamically to avoid discarding new cleaned features
         exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
         base_features = [c for c in df_mining.columns if c not in exclude_cols]
         X_mining = df_mining[base_features]
@@ -91,8 +113,7 @@ class QuantPipeline:
             dates=dates_mining
         )
         
-        # Transform (Generate Alpha Factors)
-        # 同样必须传入时空上下文供时序截面算子锚定
+        # Transform (Generate Alpha Factors for full dataset)
         new_alphas = self.generator.transform(
             df[base_features],
             codes=df['code'].values,
@@ -101,33 +122,22 @@ class QuantPipeline:
         new_alpha_cols = [f"alpha_{i}" for i in range(new_alphas.shape[1])]
         
         df_alphas = pd.DataFrame(new_alphas, columns=new_alpha_cols, index=df.index)
-        df = pd.concat([df, df_alphas], axis=1)
+        df_enriched = pd.concat([df, df_alphas], axis=1)
         
         # Features for Model are the new alphas
         features = new_alpha_cols
         logger.info(f"Generated {len(features)} alpha features via GP.")
         
-        # Train / Val Split (Time based)
-        dates = df['date'].unique()
-        # Fix for pyarrow/pandas: unique() might return an ArrowExtensionArray which doesn't have sort
-        if hasattr(dates, 'to_numpy'):
-             dates = dates.to_numpy()
-        dates.sort()
-        split_idx = int(len(dates) * 0.8)
-        split_date = dates[split_idx]
-        
-        df_train = df[df['date'] < split_date]
-        df_val = df[df['date'] >= split_date]
-        
-        logger.info(f"Training on {len(df_train)} rows, Val on {len(df_val)} rows")
+        df_train = df_enriched[df_enriched['date'] < split_date]
+        df_val   = df_enriched[df_enriched['date'] >= split_date]
         
         # 1. Run Rolling CV for robust evaluation
-        logger.info("Running Rolling Cross-Validation...")
+        logger.info("Running Rolling Cross-Validation on strictly historical train set...")
         self.trainer.run_cv(df_train, features, label='label', n_splits=5)
         
         # 2. Final Train
         self.trainer.train(df_train, features, label='label', df_val=df_val)
-        return self.trainer, features, df
+        return self.trainer, features, df_enriched
 
     def run_backtest(self):
         # 1. Train and get enriched DF
