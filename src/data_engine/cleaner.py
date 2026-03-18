@@ -155,6 +155,13 @@ class DataCleaner:
         # 计算收益率
         df['label'] = (df['next_2_open'] / df['next_open']) - 1.0
         
+        # 【核心修复】：涨跌停不可交易陷阱 (The Limit Up/Down Trap)
+        # 如果能在计算前知道明天涨停，或者后天跌停，模型将通过这些不能成交的节点骗取高分。
+        # 这里强行抹除不可交易日的 Label 为空值，断绝 GP 模型的念想。
+        if 'next_is_limit_up' in df.columns and 'next_2_is_limit_down' in df.columns:
+            untradable_mask = df['next_is_limit_up'] | df['next_2_is_limit_down']
+            df.loc[untradable_mask, 'label'] = np.nan
+        
         return df
 
     def filter_universe(self, df):

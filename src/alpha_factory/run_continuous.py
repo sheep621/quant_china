@@ -131,10 +131,11 @@ def orthogonality_check(new_alpha_scores, existing_alphas_scores, threshold=0.7)
         return False
     return True
 
-def run_alpha_factory(iterations=3):
+def run_alpha_factory(iterations=3, max_time_hours=5.5):
     """
     Alpha 挖掘主循环 (Factory Loop)
     """
+    start_time = time.time()
     logger.info("Starting Alpha Factory...")
     
     # 1. Load & Clean Data
@@ -199,8 +200,14 @@ def run_alpha_factory(iterations=3):
     
     # 3. Continuous Mining Loop
     # 3. Continuous Mining Loop
+    # 3. Continuous Mining Loop
     current_iter = 0
     while True:
+        elapsed_hours = (time.time() - start_time) / 3600.0
+        if max_time_hours > 0 and elapsed_hours >= max_time_hours:
+            logger.warning(f"Time limit reached ({elapsed_hours:.2f} >= {max_time_hours} hours). Gracefully stopping to save checkpoint.")
+            break
+            
         if iterations != -1 and current_iter >= iterations:
             break
             
@@ -278,7 +285,14 @@ def run_alpha_factory(iterations=3):
                 factor_name = f"alpha_{len(hall_of_fame)}"
                 factor_pool[factor_name] = factor_series
                 
+                # ===== 多目标适应度：同步因子池到 DataContext =====
+                # 让下一轮 GP 进化的适应度函数能计算与已有因子的相关性惩罚
+                from src.alpha_factory.context import DataContext
+                if not factor_pool.empty:
+                    DataContext.set_factor_pool(factor_pool.values)
+                
                 logger.info(f"✓ New Alpha added: {formula[:50]}... | ICIR={metrics.ICIR:.3f}, Sharpe={metrics.long_short_sharpe:.2f}")
+
                 
             except Exception as e:
                 logger.warning(f"Evaluation failed for alpha: {str(e)}")
@@ -298,6 +312,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Alpha Factory Continuous Runner')
     parser.add_argument('--iterations', type=int, default=3, help='Number of iterations to run (-1 for infinite)')
+    parser.add_argument('--max-time', type=float, default=5.5, help='Maximum execution time in hours before graceful shutdown')
     args = parser.parse_args()
     
-    run_alpha_factory(iterations=args.iterations)
+    run_alpha_factory(iterations=args.iterations, max_time_hours=args.max_time)

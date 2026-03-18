@@ -6,18 +6,73 @@ from src.infrastructure.logger import get_system_logger
 from src.alpha_factory.operators import custom_operations
 from gplearn.fitness import make_fitness
 from scipy.stats import spearmanr
+from src.alpha_factory.context import DataContext
+from src.alpha_factory.alpha_seeder import build_seed_programs, inject_seeds_into_population
 
-def _fast_spearman(y, y_pred, w):
+
+def _fast_spearman(y, y_pred, w=None):
     """
-    极限提速版粗筛适应度: 全局 1D Spearman 秩相关系数。
-    抛弃极其耗时的逐日 groupby 截面计算，提速 50 倍以上。
-    仅用于粗筛看因子的“大方向”，细节质检留给 FactorEvaluator 精筛。
+    多目标适应度: 截面 Rank IC + 正交性惩罚
+    =============================================
+    Fitness = Daily_RankIC - λ * max(和已有因子池的相关性)
+
+    这将迫使 GP 进化出不仅"高 IC"，还与已发现因子"低相关"的全新正交因子，
+    从而从源头避免因子同质化，提升投资组合多样性。
+
+    λ = 0.3 (经验值：0.2~0.4 均合理；太高会破坏 IC 导向，太低则惩罚无效)
     """
+    LAMBDA = 0.3  # 正交性惩罚系数
+
     try:
-        # 排除模型预测出常数导致 Spearman 报错的问题
-        if len(np.unique(y_pred)) <= 1: return 0.0
-        return spearmanr(y, y_pred)[0]
-    except:
+        # ——— Step 1: 计算截面 Daily Rank IC ———
+        dates = DataContext.get_dates()
+
+        if dates is None:
+            if len(np.unique(y_pred)) <= 1:
+                return 0.0
+            rank_ic = spearmanr(y, y_pred)[0]
+        else:
+            df = pd.DataFrame({'y': y, 'y_pred': y_pred, 'date': dates})
+
+            def grouped_spearman(group):
+                if len(group) < 30 or len(np.unique(group['y_pred'])) <= 1:
+                    return 0.0
+                return spearmanr(group['y'], group['y_pred'])[0]
+
+            ic_series = df.groupby('date').apply(grouped_spearman)
+            rank_ic = float(ic_series.mean()) if len(ic_series) > 0 else 0.0
+
+        if np.isnan(rank_ic):
+            rank_ic = 0.0
+
+        # ——— Step 2: 计算与已有因子池的最大相关系数 (惩罚项) ———
+        factor_pool = DataContext.get_factor_pool()
+        corr_penalty = 0.0
+
+        if factor_pool is not None and factor_pool.shape[1] > 0:
+            try:
+                n = len(y_pred)
+                if factor_pool.shape[0] == n:
+                    # 计算 y_pred 与因子池每一列的 spearmanr，取最大绝对值
+                    corrs = []
+                    for col_idx in range(factor_pool.shape[1]):
+                        col = factor_pool[:, col_idx]
+                        valid = np.isfinite(col) & np.isfinite(y_pred)
+                        if valid.sum() < 20:
+                            continue
+                        c, _ = spearmanr(y_pred[valid], col[valid])
+                        if np.isfinite(c):
+                            corrs.append(abs(c))
+                    if corrs:
+                        corr_penalty = max(corrs)
+            except Exception:
+                corr_penalty = 0.0
+
+        # ——— Step 3: 多目标合并得分 ———
+        fitness = rank_ic - LAMBDA * corr_penalty
+        return float(fitness)
+
+    except Exception:
         return 0.0
 
 # 越高越好的适应度
@@ -42,7 +97,7 @@ class AlphaGenerator:
         self.gp = SymbolicTransformer(
             generations=generations,
             population_size=population_size,
-            hall_of_fame=20,  # 缩小名人堂
+            hall_of_fame=100,  # 恢复名人堂大小
             n_components=10,  # 输出10个最佳Alpha
             
             # === 核心配置 ===
@@ -98,14 +153,69 @@ class AlphaGenerator:
             logger.info("DataContext initialized successfully for TS & CS isolation.")
         
         try:
-            # NaN处理
-            if isinstance(X, pd.DataFrame):
-                X_clean = X.fillna(0).values
-            else:
-                X_clean = np.nan_to_num(X)
-                
-            y_clean = np.nan_to_num(y)
+            # 致命漏洞修复：禁止暴力 NaN 到 0.0 的填充。
+            # 这会导致 GP 被诱导去预测 0
+            # 必须计算出有效的布尔掩码（Mask），抛弃那些本来就不允许交易的数据行
             
+            # 找到包含 NaN 标签的行
+            if isinstance(y, pd.Series):
+                y_arr = y.values
+            else:
+                y_arr = y
+            
+            # 使用 numpy 找到非 NaN 且非无穷大
+            valid_mask = np.isfinite(y_arr)
+            
+            # 此时我们只给 GP 引擎传有效值！
+            if isinstance(X, pd.DataFrame):
+                X_clean = X.fillna(0).values[valid_mask]
+            else:
+                X_clean = np.nan_to_num(X)[valid_mask]
+                
+            y_clean = y_arr[valid_mask]
+            
+            # 同步限制 DataContext 内部长度
+            if codes is not None and dates is not None:
+                DataContext.set_context(codes[valid_mask], dates[valid_mask])
+            
+            # ===== 暖启动：Alpha101 经典基因注入 =====
+            # 在首次 GP.fit 之前，先用简易版运行 1 代来动态初始化内部状态
+            # 再将经典 Alpha101 基因注入 Generation 0
+            if not getattr(self.gp, 'warm_start', False) or not getattr(self.gp, '_programs', None):
+                try:
+                    logger.info("[Seeder] Building Alpha101 warm-start seed programs...")
+                    # 用一个最小配置的副本进行 1 代初始化，不浪费大计算资源
+                    import copy
+                    mini_gp = copy.deepcopy(self.gp)
+                    mini_gp.generations = 1
+                    #mini_gp.population_size = max(50, min(100, self.gp.population_size // 5))
+                    mini_gp.verbose = 0
+                    mini_gp.n_jobs = 1
+                    mini_gp.fit(X_clean, y_clean)  # 使用完整数据不用 50 行子集
+
+                    rng = np.random.RandomState(42)
+                    seeds = build_seed_programs(
+                        transformer=mini_gp,
+                        feature_names=feature_names or [f'X{i}' for i in range(X_clean.shape[1])],
+                        n_features=X_clean.shape[1],
+                        random_state=rng
+                    )
+                    inject_seeds_into_population(mini_gp, seeds, population_ratio=0.3)
+
+                    # 将注入后的种群作为真实引擎的初始种群
+                    if getattr(mini_gp, '_programs', None):
+                        self.gp._programs = mini_gp._programs
+                        self.gp.warm_start = True
+                        logger.info(f"[Seeder] Injected {len(seeds)} Alpha101 seeds. GP will evolve from these.")
+                except Exception as e:
+                    logger.warning(f"[Seeder] Warm-start injection failed (non-fatal, continuing normally): {e}")
+            else:
+                # 【核心修复点】：进入第二轮及以后的循环时，必须增加目标代数
+                # 否则 gplearn 会因为已达到目标代数而拒绝生成新公式，导致越界报错
+                increment_gens = 5  # 每次循环往后多挖5代（可根据算力调整）
+                self.gp.generations += increment_gens
+                logger.info(f"[Warm Start] Resuming evolution. Target total generations increased to: {self.gp.generations}")
+
             # 执行进化
             self.gp.fit(X_clean, y_clean)
             

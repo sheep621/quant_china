@@ -52,13 +52,17 @@ def _decay_linear_5(x1):
     weights = np.array([1, 2, 3, 4, 5])
     weights = weights / weights.sum()
     # 使用卷积实现快速加权移动平均
-    return np.convolve(x1, weights[::-1], mode='full')[:len(x1)]
+    res = np.convolve(x1, weights[::-1], mode='full')[:len(x1)]
+    from src.alpha_factory.context import DataContext
+    return DataContext.mask_invalid_ts(res, 5)
 
 def _decay_linear_10(x1):
     """Decay_Linear - 10期窗口"""
     weights = np.arange(1, 11)
     weights = weights / weights.sum()
-    return np.convolve(x1, weights[::-1], mode='full')[:len(x1)]
+    res = np.convolve(x1, weights[::-1], mode='full')[:len(x1)]
+    from src.alpha_factory.context import DataContext
+    return DataContext.mask_invalid_ts(res, 10)
 
 def _ts_min_5(x1):
     """滚动最小值(5期)"""
@@ -238,20 +242,29 @@ def _truncate(x1):
 
 def _ind_neutralize(x1, x2):
     """
-    行业中性化
+    行业中性化 (修复版)
     x1: 因子值
     x2: 行业/分组代码
     """
-    # 简单的去均值处理
-    # 注意: 这里假设x1, x2长度一致且一一对应
-    # 由于gplearn传入的是numpy array，我们需要转DataFrame做groupby
     try:
         df = pd.DataFrame({'val': x1, 'grp': x2})
-        # 填充NaN分组
-        df['grp'] = df['grp'].fillna(-1)
-        # 组内去均值
-        neutralized = df.groupby('grp')['val'].transform(lambda x: x - x.mean())
-        return neutralized.fillna(0).values
+        
+        # 致命漏洞修复：不能把所有没行业的股票填成一个组（比如-1）去均值，
+        # 否则这些风马牛不相及的股票互相去均值会严重污染真实排位。
+        # 正确做法：有行业的在行业内去均值，没行业的保持原样或去全局均值。
+        
+        # 找到有效行业组
+        valid_mask = df['grp'].notna() & (df['grp'] != -1) & (df['grp'] != '')
+        
+        res = x1.copy()
+        
+        if valid_mask.any():
+            # 只对有行业归属的股票进行组内去均值
+            valid_df = df[valid_mask]
+            neutralized = valid_df.groupby('grp')['val'].transform(lambda x: x - x.mean())
+            res[valid_mask] = neutralized.values
+            
+        return np.nan_to_num(res)
     except:
         return x1 # Fallback
 

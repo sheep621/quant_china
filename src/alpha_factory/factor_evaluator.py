@@ -55,8 +55,8 @@ class FactorMetrics:
         返回 (通过, 原因)
         """
         criteria = {
-            'ICIR': (self.ICIR > 1.0, f"ICIR={self.ICIR:.3f} < 1.0 (需要极其稳健的预测力)"),
-            'IC_positive_ratio': (self.IC_positive_ratio > 0.55, f"IC胜率={self.IC_positive_ratio:.2%} < 55%"),
+            'ICIR': (self.ICIR > 0.5, f"ICIR={self.ICIR:.3f} < 0.5 (预测力不足)"),
+            'IC_positive_ratio': (self.IC_positive_ratio > 0.52, f"IC胜率={self.IC_positive_ratio:.2%} < 52%"),
             'turnover': (self.turnover < 0.4, f"换手率={self.turnover:.2%} > 40% (剥离过度交易因子)"),
             'uniqueness': (self.factor_uniqueness > 0.3, f"特异性={self.factor_uniqueness:.2f} < 0.3"),
         }

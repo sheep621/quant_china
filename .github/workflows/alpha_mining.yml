@@ -37,8 +37,8 @@ jobs:
         
     - name: Run Alpha Mining
       run: |
-        # Run for 50 iterations
-        python src/alpha_factory/run_continuous.py --iterations 50
+        # Run infinitely until time limit (5.5 hours) is reached
+        python src/alpha_factory/run_continuous.py --iterations -1 --max-time 5.5
         
     - name: Commit and Push Results
       run: |

@@ -168,20 +168,101 @@ class DataLoader:
                 
         logger.info(f"Data update completed. Success: {success_count}, Skipped: {skipped_count}, Total: {len(codes)}")
 
+    def incremental_update(self, codes, end_date=None):
+        """
+        增量更新：只下载每只股票上次数据截止日之后的新数据，并追加合并。
+        这样不需要重新下载全量历史，每次只补充最新行情即可。
+        """
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+
+        logger.info(f"Starting INCREMENTAL data update for {len(codes)} stocks up to {end_date}")
+        update_count = 0
+        skip_count = 0
+
+        for i, code in enumerate(codes):
+            file_path = self.data_dir / f"{code}.parquet"
+            try:
+                if file_path.exists():
+                    existing = pd.read_parquet(file_path)
+                    existing['date'] = pd.to_datetime(existing['date'])
+                    last_date = existing['date'].max()
+                    start_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                else:
+                    existing = None
+                    start_date = "2020-01-01"
+
+                if start_date >= end_date:
+                    skip_count += 1
+                    continue
+
+                time.sleep(0.5)  # 温和请求，防止被封
+                new_df = self.fetch_daily_data(code, start_date, end_date)
+
+                if new_df is not None and not new_df.empty:
+                    new_df['date'] = pd.to_datetime(new_df['date'])
+                    if existing is not None:
+                        merged = pd.concat([existing, new_df], ignore_index=True)
+                        merged = merged.drop_duplicates(subset=['date', 'code']).sort_values('date')
+                    else:
+                        merged = new_df.sort_values('date')
+                    merged.to_parquet(file_path, index=False)
+                    update_count += 1
+                    logger.info(f"[{i+1}/{len(codes)}] {code}: +{len(new_df)} rows ({start_date} ~ {end_date})")
+                else:
+                    skip_count += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to update {code}: {e}")
+
+        logger.info(f"Incremental update done. Updated: {update_count}, Skipped/Up-to-date: {skip_count}")
+
+
+
+    def sync_all(self, end_date=None):
+        """
+        全量同步方案：获取所有指数成分股，并执行增量更新。
+        """
+        if not self.login():
+            return
+        
+        try:
+            codes = self.get_stock_list()
+            if codes:
+                self.incremental_update(codes, end_date=end_date)
+            else:
+                logger.error("Could not fetch stock list.")
+        finally:
+            self.logout()
+
+    def detect_gaps(self, codes, target_start="2020-01-01"):
+        """
+        检测缺失情况（用于诊断）
+        """
+        missing_entirely = []
+        truncated = []
+        
+        for code in codes:
+            file_path = self.data_dir / f"{code}.parquet"
+            if not file_path.exists():
+                missing_entirely.append(code)
+                continue
+            
+            try:
+                df = pd.read_parquet(file_path)
+                if df.empty:
+                    missing_entirely.append(code)
+                    continue
+                
+                last_date = pd.to_datetime(df['date']).max().strftime("%Y-%m-%d")
+                truncated.append((code, last_date))
+            except Exception:
+                missing_entirely.append(code)
+                
+        return missing_entirely, truncated
+
+
 if __name__ == "__main__":
-    # Test script
+    # Test script: full sync
     loader = DataLoader()
-    if loader.login():
-        # Test with one stock: Ping An Bank
-        test_code = "sz.000001"
-        logger.info(f"Fetching {test_code}...")
-        df = loader.fetch_daily_data(test_code, "2023-01-01", "2023-12-31")
-        if df is not None:
-            logger.info(f"Fetched {len(df)} rows. Head:\n{df.head()}")
-            
-            # Save test
-            loader.update_data([test_code], "2023-01-01", "2023-12-31")
-        else:
-            logger.error("Fetch failed")
-            
-        loader.logout()
+    loader.sync_all()

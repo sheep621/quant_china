@@ -5,10 +5,12 @@ class DataContext:
     """
     全局数据上下文，用于向 gplearn 的函数注入股票代码(code)和日期(date)信息，
     从而解决时序算子跨股票污染和截面算子无法按交易日对齐的根本缺陷。
+    同时存储已发现的优质因子池，供多目标适应度惩罚项计算使用。
     """
     _codes = None
     _dates = None
     _masks = {}  # 缓存的掩码: mask[window] = boolean array
+    _factor_pool = None  # numpy array (n_samples, n_factors) — 已通过质量门控的因子截面值
     
     @classmethod
     def set_context(cls, codes, dates):
@@ -26,7 +28,21 @@ class DataContext:
     @classmethod
     def get_dates(cls):
         return cls._dates
-        
+
+    @classmethod
+    def set_factor_pool(cls, factor_array: np.ndarray):
+        """
+        保存已发现的优质因子池（截面值），供适应度相关性惩罚项使用。
+        factor_array: shape (n_samples, n_factors)
+        """
+        cls._factor_pool = factor_array
+
+    @classmethod
+    def get_factor_pool(cls):
+        """返回已有因子池 numpy array，如果为空则返回 None。"""
+        return cls._factor_pool
+
+
     @classmethod
     def get_mask(cls, window):
         """
