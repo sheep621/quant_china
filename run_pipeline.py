@@ -92,7 +92,7 @@ class QuantPipeline:
         logger.info(f"Training on {len(df_train_raw)} rows, Val on {len(df_val_raw)} rows")
         
         # Feature Engineering: Use AlphaGenerator only on TRAIN set
-        df_mining = df_train_raw.dropna(subset=['label'])
+        df_mining = df_train_raw.copy()
         
         # Extract features dynamically to avoid discarding new cleaned features
         exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']

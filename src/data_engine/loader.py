@@ -26,45 +26,28 @@ class DataLoader:
         logger.info("BaoStock logout")
 
     def get_stock_list(self, date=None):
-        """Fetch liquid A-share stocks (HS300 + ZZ500 + SZ50)"""
+        """Fetch Full Market A-share stocks (Point-in-Time)"""
         if date is None:
-            # Use a recent trading date to ensure we get constituents
             date = datetime.now().strftime("%Y-%m-%d")
             
-        logger.info(f"Fetching stock list from Major Indices (HS300, ZZ500, SZ50) on {date}...")
+        logger.info(f"Fetching FULL MARKET stock list on {date}...")
         
         target_codes = set()
+        rs = bs.query_all_stock(date)
         
-        # Helper to query and add
-        def _add_index(rs_func, name):
-            rs = rs_func(date)
-            if rs.error_code != '0':
-                logger.warning(f"{name} query failed: {rs.error_msg}")
-                return
-            while rs.next():
-                # code is usually at index 1: update_date, code, code_name
-                target_codes.add(rs.get_row_data()[1])
-        
-        _add_index(bs.query_hs300_stocks, "HS300")
-        _add_index(bs.query_zz500_stocks, "ZZ500")
-        _add_index(bs.query_sz50_stocks, "SZ50")
+        if rs.error_code != '0':
+            logger.error(f"query_all_stock failed: {rs.error_msg}")
+            return []
             
-        # Fallback to recent known date if empty (e.g. today is holiday)
-        if len(target_codes) < 100:
-            logger.warning("Few stocks found (Holiday?). Trying fallback date 2023-12-01...")
-            fallback_date = "2023-12-01"
-            
-            def _add_index_fb(rs_func):
-                rs = rs_func(fallback_date)
-                while (rs.error_code == '0') & rs.next():
-                     target_codes.add(rs.get_row_data()[1])
-            
-            _add_index_fb(bs.query_hs300_stocks)
-            _add_index_fb(bs.query_zz500_stocks)
-            _add_index_fb(bs.query_sz50_stocks)
-        
+        while rs.next():
+            row = rs.get_row_data()
+            code = row[0]
+            # 过滤 A 股主板、创业板、科创板，剔除 B 股、北交所和指数代码
+            if code.startswith('sh.6') or code.startswith('sz.0') or code.startswith('sz.3'):
+                target_codes.add(code)
+                
         final_list = sorted(list(target_codes))
-        logger.info(f"Total target stocks (Index Constituents): {len(final_list)}")
+        logger.info(f"Total target stocks (Full Market): {len(final_list)}")
         return final_list
 
     def fetch_daily_data(self, code, start_date, end_date):

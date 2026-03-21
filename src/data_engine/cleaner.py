@@ -35,31 +35,24 @@ class DataCleaner:
         return series.clip(lower=lower_bound, upper=upper_bound)
         
     def process_daily_data(self, df):
-        """
-        清洗并特征工程 - 优化版
         
-        新增处理:
-        1. Rank归一化量价特征
-        2. MAD去极值 (替代Winsorize)
-        3. 改进的涨跌停检测 (支持科创板/创业板 20%)
-        4. 计算 High Limit (涨停价) 用于 limit_distance 算子
-        5. 修正: 使用 groupby 进行 shift 操作, 防止不同股票数据由于排序混杂
-        """
+        """清洗并特征工程 - 优化版"""
+        
         if df is None or df.empty:
             return None
             
-        # 必须确保有 code 列
         if 'code' not in df.columns:
-            logger.warning("Data missing 'code' column, treating as single stock")
             df['code'] = 'mock_code'
         
-        # Sort by code and date to ensure correct grouping structure (optional but safe)
         if 'date' in df.columns:
             df = df.sort_values(['code', 'date']).reset_index(drop=True)
 
-        # 1. Filter Suspended Stocks
+        # 1. Tag Suspended & ST Stocks (【核心修复】：绝对不能 drop，必须保留行作为时序占位符！)
+        df['is_tradable'] = True
         if 'tradestatus' in df.columns:
-            df = df[df['tradestatus'] == '1'].copy()
+            df['is_tradable'] = df['is_tradable'] & (df['tradestatus'] == '1')
+        if 'isST' in df.columns:
+            df['is_tradable'] = df['is_tradable'] & (df['isST'].astype(str) != '1')
             
         # 2. Limit Logic & Limit Price Calculation
         # 需要计算 high_limit 供 limit_distance 算子使用
@@ -143,23 +136,18 @@ class DataCleaner:
                 # 注意: pandas rank可能较慢, 但正确性优先
                 df[f'{col}_rank'] = df.groupby('date')[f'{col}_winsorized'].transform(lambda x: x.rank(pct=True))
 
+
         # 4. Generate Label (T+1 Strategy)
-        # CRITICAL FIX: Group by code for shifts!
-        # Label: (Open_T+2 / Open_T+1) - 1
-        # 需要 shift(-1) 得到 T+1 Open, shift(-2) 得到 T+2 Open
-        
         grouped_open = df.groupby('code')['open']
         df['next_open'] = grouped_open.shift(-1)   # Open_T+1
         df['next_2_open'] = grouped_open.shift(-2) # Open_T+2
-        
-        # 计算收益率
         df['label'] = (df['next_2_open'] / df['next_open']) - 1.0
         
-        # 【核心修复】：涨跌停不可交易陷阱 (The Limit Up/Down Trap)
-        # 如果能在计算前知道明天涨停，或者后天跌停，模型将通过这些不能成交的节点骗取高分。
-        # 这里强行抹除不可交易日的 Label 为空值，断绝 GP 模型的念想。
+        # 【核心修复】：涨跌停及停牌不可交易陷阱
+        # 停牌、ST、涨停买不到、跌停卖不出，统统设为 NaN，让评估器忽略它们
         if 'next_is_limit_up' in df.columns and 'next_2_is_limit_down' in df.columns:
-            untradable_mask = df['next_is_limit_up'] | df['next_2_is_limit_down']
+            # 增加了 (~df['is_tradable']) 的判定
+            untradable_mask = df['next_is_limit_up'] | df['next_2_is_limit_down'] | (~df['is_tradable'])
             df.loc[untradable_mask, 'label'] = np.nan
         
         return df

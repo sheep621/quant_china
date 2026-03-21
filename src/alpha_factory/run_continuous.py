@@ -145,7 +145,7 @@ def run_alpha_factory(iterations=3, max_time_hours=5.5):
     
     # 准备特征 X 和标签 y
     # 将包含 NaN label 的行剔除，否则 GP 引擎会强行将它充当 0.0 给矿机拟合，形成噪音污染
-    df_clean_mining = df_clean.dropna(subset=['label'])
+    df_clean_mining = df_clean.copy()
     
     # 移除非特征列
     exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
