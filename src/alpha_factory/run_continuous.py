@@ -243,6 +243,10 @@ def run_alpha_factory(iterations=3, max_time_hours=5.5):
                 if factor_values.shape[1] <= idx:
                     continue
                 factor_series = pd.Series(factor_values[:, idx], index=X_train.index)
+
+                # 【Barra 风格中性化】
+                logger.info("Applying Barra Size Neutralization...")
+                factor_series = orthogonalizer.neutralize_size(factor_series, X_train, pd.Series(dates_train))
                 
                 # 质量评估 (修复ICIR计算bug:透传dates及codes)
                 metrics = evaluator.evaluate(

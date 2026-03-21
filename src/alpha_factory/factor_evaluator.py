@@ -105,7 +105,7 @@ class FactorEvaluator:
             # --- FIX: Use .values to avoid index misalignment mismatch ---
             mask_vals = luld_mask.values if hasattr(luld_mask, 'values') else np.array(luld_mask)
             if len(mask_vals) == len(returns):
-                returns.loc[mask_vals] = np.nan
+                returns.iloc[mask_vals] = np.nan
             else:
                 logger.warning("luld_mask length does not match returns, skipping LULD penalty.")
             

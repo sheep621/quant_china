@@ -128,6 +128,25 @@ class QuantPipeline:
         features = new_alpha_cols
         logger.info(f"Generated {len(features)} alpha features via GP.")
         
+        # ============== 新增：任务 4.1 特征截面标准化 (极速向量化版) ==============
+        logger.info("Applying Cross-Sectional Z-Score standardization to all ML features...")
+        features_to_normalize = base_features + new_alpha_cols
+        
+        # 避免缓慢的 for 循环 lambda，直接使用 Pandas 的向量化底层 C 引擎计算
+        grouped = df_enriched.groupby('date')[features_to_normalize]
+        mean_df = grouped.transform('mean')
+        std_df = grouped.transform('std')
+        
+        # 极速全局去均值除以标准差
+        df_enriched[features_to_normalize] = (df_enriched[features_to_normalize] - mean_df) / (std_df + 1e-8)
+        # ==========================================================
+        # 每日截面 z-score，规避大盘极端波动带来的绝对值漂移，将所有特征无量纲化
+        for col in features_to_normalize:
+            df_enriched[col] = df_enriched.groupby('date')[col].transform(
+                lambda x: (x - x.mean()) / (x.std() + 1e-8)
+            )
+        # ==========================================================
+       
         df_train = df_enriched[df_enriched['date'] < split_date]
         df_val   = df_enriched[df_enriched['date'] >= split_date]
         
@@ -135,8 +154,10 @@ class QuantPipeline:
         logger.info("Running Rolling Cross-Validation on strictly historical train set...")
         self.trainer.run_cv(df_train, features, label='label', n_splits=5)
         
-        # 2. Final Train
-        self.trainer.train(df_train, features, label='label', df_val=df_val)
+        # 2. Final Train (不再传入外部的 df_val，完全交由模型内部切分以防泄露)
+        self.trainer.train(df_train, features, label='label')
+        
+        # 为了让后续的回测模块有完整的数据可用，返回 df_enriched
         return self.trainer, features, df_enriched
 
     def run_backtest(self):
