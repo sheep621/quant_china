@@ -131,7 +131,7 @@ logger = get_system_logger()
 
 class AlphaGenerator:
     def __init__(self, population_size=200, generations=5, n_jobs=1, warm_start=False, checkpoint_path=None):
-        function_set = ['add', 'sub', 'mul', 'neg', 'abs'] + custom_operations
+        function_set = ['add', 'sub', 'mul', 'div', 'log', 'min', 'max', 'neg', 'abs'] + custom_operations
         self.gp = SymbolicTransformer(
             generations=generations,
             population_size=population_size,
@@ -192,7 +192,7 @@ class AlphaGenerator:
                         n_features=X_clean.shape[1],
                         random_state=rng
                     )
-                    inject_seeds_into_population(mini_gp, seeds, population_ratio=0.3)
+                    inject_seeds_into_population(mini_gp, seeds, X_clean, y_clean, population_ratio=0.3)
 
                     if getattr(mini_gp, '_programs', None):
                         self.gp._programs = mini_gp._programs
@@ -203,8 +203,30 @@ class AlphaGenerator:
             else:
                 self.gp.generations += 5
                 logger.info(f"[Warm Start] Target total generations increased to: {self.gp.generations}")
+            
 
+
+
+            # ---------- 修复 gplearn warm_start 源码 Bug ----------
+            if self.gp.warm_start and hasattr(self.gp, '_programs'):
+                if not hasattr(self.gp, 'run_details_'):
+                    self.gp.run_details_ = {
+                        'generation': [],
+                        'average_length': [],
+                        'average_fitness': [],
+                        'best_length': [],
+                        'best_fitness': [],
+                        'best_oob_fitness': [],
+                        'generation_time': []
+                    }
+            # ------------------------------------------------------
+            
+            # 原有代码：执行 GP 训练
             self.gp.fit(X_clean, y_clean)
+
+
+
+            
             
             logger.info("=== GP Mining Completed ===")
             saved_alphas = []

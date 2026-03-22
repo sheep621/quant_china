@@ -31,19 +31,17 @@ class LGBMTrainer:
         内部辅助函数：LambdaRank 强制要求同组(同一天)的数据必须挨在一起，
         且需要提供 group 数组告诉模型每天有多少行。
         """
-        # 必须按日期排序，确保截面数据连续
-        df_sorted = df.sort_values('date').copy()
-        X = df_sorted[features].values
-        y = df_sorted[label].values
-        # 统计每一天的样本数，作为 group 参数
-        group = df_sorted.groupby('date', sort=False).size().values
-        return X, y, group, df_sorted
+        # 调用你刚刚写好的排序数据预处理方法
+        X, y, group = self._prepare_ranking_data(df, features, label_col=label)
+        
+        # 必须把 group 传进去，这是 Lambdarank 不报错的关键！
+        dataset = lgb.Dataset(X, label=y, group=group)
+        return dataset
 
     def train(self, df_train, features, label):
         logger.info("Training LGBM Model with LambdaRank...")
         
         # 核心改造 2：防过拟合的内部验证集切分
-        # 从训练集中切出最后 10% 的时间作为 early stopping 的真实依据
         dates = sorted(df_train['date'].unique())
         split_idx = int(len(dates) * 0.9)
         split_date = dates[split_idx]
@@ -56,10 +54,11 @@ class LGBMTrainer:
             inner_train_df = df_train
             inner_val_df = df_train
 
-        X_tr, y_tr, g_tr, _ = self._prepare_lgb_data(inner_train_df, features, label)
-        X_va, y_va, g_va, _ = self._prepare_lgb_data(inner_val_df, features, label)
-
-        dtrain = lgb.Dataset(X_tr, label=y_tr, group=g_tr)
+        # 使用更新后的 _prepare_lgb_data 构建带有 group 参数的训练集
+        dtrain = self._prepare_lgb_data(inner_train_df, features, label)
+        
+        # 如果有验证集，验证集也必须带有 group 参数，并且指定 reference 为 train_set
+        X_va, y_va, g_va = self._prepare_ranking_data(inner_val_df, features, label_col=label)
         dval = lgb.Dataset(X_va, label=y_va, group=g_va, reference=dtrain)
 
         self.model = lgb.train(
@@ -108,11 +107,11 @@ class LGBMTrainer:
             inner_train_df = df_train_fold[df_train_fold['date'] < inner_split_date]
             inner_val_df = df_train_fold[df_train_fold['date'] >= inner_split_date]
 
-            X_tr, y_tr, g_tr, _ = self._prepare_lgb_data(inner_train_df, features, label)
-            X_va, y_va, g_va, _ = self._prepare_lgb_data(inner_val_df, features, label)
-            X_te, y_te, g_te, df_test_sorted = self._prepare_lgb_data(df_test_fold, features, label)
-
-            dtrain = lgb.Dataset(X_tr, label=y_tr, group=g_tr)
+            # 使用更新后的 _prepare_lgb_data 构建带有 group 参数的训练集
+            dtrain = self._prepare_lgb_data(inner_train_df, features, label)
+            
+            # 如果有验证集，验证集也必须带有 group 参数，并且指定 reference 为 train_set
+            X_va, y_va, g_va = self._prepare_ranking_data(inner_val_df, features, label_col=label)
             dval = lgb.Dataset(X_va, label=y_va, group=g_va, reference=dtrain)
 
             model = lgb.train(
@@ -124,14 +123,16 @@ class LGBMTrainer:
             )
 
             # 在纯净的测试集上预测，并计算截面 Rank IC 代替 RMSE
-            preds = model.predict(X_te, num_iteration=model.best_iteration)
+            # 测试集无需变换为分箱数据，直接使用原始特征推理
+            df_test_sorted = df_test_fold.sort_values('date').copy()
+            preds = model.predict(df_test_sorted[features].values, num_iteration=model.best_iteration)
             df_test_sorted['pred'] = preds
             
             def _daily_ic(sub):
                 if len(sub) > 1: return sub[label].corr(sub['pred'], method='spearman')
                 return np.nan
                 
-            daily_ic = df_test_sorted.groupby('date').apply(_daily_ic).mean()
+            daily_ic = df_test_sorted.groupby('date', group_keys=False).apply(_daily_ic).mean()
             cv_metrics.append(daily_ic)
             
             logger.info(f"Fold {i+1}: Train -> {train_end.strftime('%Y-%m-%d')} | Test -> {test_end.strftime('%Y-%m-%d')} | OOS Rank IC: {daily_ic:.4f}")
@@ -145,6 +146,30 @@ class LGBMTrainer:
             raise ValueError("Model not trained yet!")
         # 推理阶段不需要 group
         return self.model.predict(df[features].values, num_iteration=self.model.best_iteration)
+
+    def _prepare_ranking_data(self, df, features, label_col='label', n_bins=5):
+        """
+        核心改造：将连续收益率转换为 Lambdarank 需要的离散整数标签，并生成 group 参数
+        """
+        # 1. 必须按日期排序，这是 Lambdarank 分组计算 NDCG 的绝对前提
+        df_sorted = df.sort_values('date').copy()
+        
+        # 2. 截面分箱：每天按收益率将股票分为 n_bins 档 (例如 0, 1, 2, 3, 4)
+        # qcut 会自动处理排名，duplicates='drop' 防止遇到大面积停牌/一字板时分箱报错
+        df_sorted['label_int'] = df_sorted.groupby('date')[label_col].transform(
+            lambda x: pd.qcut(x, q=n_bins, labels=False, duplicates='drop')
+        )
+        
+        # 填充异常值（比如某天全市场停牌）为中间档位，并强制转为 int
+        df_sorted['label_int'] = df_sorted['label_int'].fillna(n_bins // 2).astype(int)
+        
+        # 3. 计算每天的股票数量 (query_lengths)，这是 Lambdarank 必须的 group 参数
+        group_sizes = df_sorted.groupby('date').size().values
+        
+        X = df_sorted[features]
+        y = df_sorted['label_int']
+        
+        return X, y, group_sizes
 
     def save_model(self, path):
         if self.model: self.model.save_model(path)

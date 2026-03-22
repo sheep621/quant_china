@@ -26,29 +26,42 @@ class DataLoader:
         logger.info("BaoStock logout")
 
     def get_stock_list(self, date=None):
-        """Fetch Full Market A-share stocks (Point-in-Time)"""
+        """Fetch Full Market A-share stocks (Point-in-Time) with weekend fallback"""
+        from datetime import datetime, timedelta
+        
         if date is None:
-            date = datetime.now().strftime("%Y-%m-%d")
+            query_date = datetime.now()
+        else:
+            query_date = datetime.strptime(date, "%Y-%m-%d")
             
-        logger.info(f"Fetching FULL MARKET stock list on {date}...")
-        
-        target_codes = set()
-        rs = bs.query_all_stock(date)
-        
-        if rs.error_code != '0':
-            logger.error(f"query_all_stock failed: {rs.error_msg}")
-            return []
+        # 自动往前推最多 7 天，确保一定能碰上一个交易日
+        for _ in range(7):
+            date_str = query_date.strftime("%Y-%m-%d")
+            logger.info(f"Fetching FULL MARKET stock list on {date_str}...")
             
-        while rs.next():
-            row = rs.get_row_data()
-            code = row[0]
-            # 过滤 A 股主板、创业板、科创板，剔除 B 股、北交所和指数代码
-            if code.startswith('sh.6') or code.startswith('sz.0') or code.startswith('sz.3'):
-                target_codes.add(code)
+            target_codes = set()
+            rs = bs.query_all_stock(date_str)
+            
+            if rs.error_code == '0':
+                while rs.next():
+                    row = rs.get_row_data()
+                    code = row[0]
+                    # 过滤 A 股主板、创业板、科创板，剔除 B 股、北交所和指数代码
+                    if code.startswith('sh.6') or code.startswith('sz.0') or code.startswith('sz.3'):
+                        target_codes.add(code)
+            
+            # 如果成功获取到了股票（大于0），说明碰到了交易日
+            if len(target_codes) > 0:
+                final_list = sorted(list(target_codes))
+                logger.info(f"Total target stocks (Full Market): {len(final_list)} (Found on {date_str})")
+                return final_list, date_str # 返回列表和查找到的真实交易日
                 
-        final_list = sorted(list(target_codes))
-        logger.info(f"Total target stocks (Full Market): {len(final_list)}")
-        return final_list
+            # 如果没获取到（比如是周末或节假日），往前推一天继续试
+            logger.warning(f"{date_str} returned 0 stocks (likely a weekend/holiday). Stepping back 1 day...")
+            query_date -= timedelta(days=1)
+            
+        logger.error("Could not fetch stock list after checking the past 7 days.")
+        return [], None
 
     def fetch_daily_data(self, code, start_date, end_date):
         """
@@ -153,34 +166,45 @@ class DataLoader:
 
     def incremental_update(self, codes, end_date=None):
         """
-        增量更新：只下载每只股票上次数据截止日之后的新数据，并追加合并。
-        这样不需要重新下载全量历史，每次只补充最新行情即可。
+        增量更新：并行版本。
         """
         if end_date is None:
             end_date = datetime.now().strftime("%Y-%m-%d")
 
-        logger.info(f"Starting INCREMENTAL data update for {len(codes)} stocks up to {end_date}")
-        update_count = 0
-        skip_count = 0
+        logger.info(f"Starting PARALLEL INCREMENTAL update for {len(codes)} stocks up to {end_date}")
+        
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        
+        lock = threading.Lock()
+        stats = {"update_count": 0, "skip_count": 0}
 
-        for i, code in enumerate(codes):
+        def _worker(code):
             file_path = self.data_dir / f"{code}.parquet"
             try:
                 if file_path.exists():
+                    # 预检日期：如果本地最新日期已达到目标日期，则标记为 Skip
+                    # 这里直接读 parquet 最后一行的快照
                     existing = pd.read_parquet(file_path)
-                    existing['date'] = pd.to_datetime(existing['date'])
-                    last_date = existing['date'].max()
-                    start_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                    if existing.empty:
+                        last_date_str = "2020-01-01"
+                        existing = None
+                    else:
+                        existing['date'] = pd.to_datetime(existing['date'])
+                        last_date_str = existing['date'].max().strftime("%Y-%m-%d")
+                    
+                    start_today = (pd.to_datetime(last_date_str) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                    
+                    if last_date_str >= end_date:
+                        with lock: stats["skip_count"] += 1
+                        return
                 else:
                     existing = None
-                    start_date = "2020-01-01"
+                    start_today = "2020-01-01"
 
-                if start_date >= end_date:
-                    skip_count += 1
-                    continue
-
-                time.sleep(0.5)  # 温和请求，防止被封
-                new_df = self.fetch_daily_data(code, start_date, end_date)
+                # 确实需要下载时，拉长间隔至 1.5s
+                time.sleep(1.5) 
+                new_df = self.fetch_daily_data(code, start_today, end_date)
 
                 if new_df is not None and not new_df.empty:
                     new_df['date'] = pd.to_datetime(new_df['date'])
@@ -190,31 +214,48 @@ class DataLoader:
                     else:
                         merged = new_df.sort_values('date')
                     merged.to_parquet(file_path, index=False)
-                    update_count += 1
-                    logger.info(f"[{i+1}/{len(codes)}] {code}: +{len(new_df)} rows ({start_date} ~ {end_date})")
+                    with lock: stats["update_count"] += 1
                 else:
-                    skip_count += 1
+                    with lock: stats["skip_count"] += 1
 
             except Exception as e:
-                logger.warning(f"Failed to update {code}: {e}")
+                logger.warning(f"Worker failed for {code}: {e}")
 
-        logger.info(f"Incremental update done. Updated: {update_count}, Skipped/Up-to-date: {skip_count}")
+        # 鉴于 Baostock 对并发及 IP 频率极其敏感，且 5500 只标的数量巨大：
+        # 这里切换回“稳定模式”：单线程 + 更长的 sleep
+        logger.info(f"Using STABLE SERIAL mode to ensure data integrity...")
+        
+        success_count = stats["update_count"]
+        skip_count = stats["skip_count"]
+        
+        for i, code in enumerate(codes):
+            _worker(code)
+            if (i + 1) % 20 == 0 or (i + 1) == len(codes):
+                logger.info(f"Sync Progress: {i+1}/{len(codes)} (Updated: {stats['update_count']}, Skipped: {stats['skip_count']})")
 
-
+        logger.info(f"Incremental update done. Updated: {stats['update_count']}, Skipped: {stats['skip_count']}")
 
     def sync_all(self, end_date=None):
         """
-        全量同步方案：获取所有指数成分股，并执行增量更新。
+        全量同步方案：获取最新交易日作为锚点。
         """
         if not self.login():
             return
         
         try:
-            codes = self.get_stock_list()
-            if codes:
-                self.incremental_update(codes, end_date=end_date)
-            else:
-                logger.error("Could not fetch stock list.")
+            # 1. 探测最新可用交易日
+            codes, last_market_date = self.get_stock_list()
+            
+            if not codes or not last_market_date:
+                logger.error("Could not fetch valid stock list or market date.")
+                return
+
+            # 如果用户没传 end_date，强制使用探测到的交易日，防止周末空转
+            target_end_date = end_date or last_market_date
+            
+            logger.info(f"Target Sync Point: {target_end_date}")
+            self.incremental_update(codes, end_date=target_end_date)
+            
         finally:
             self.logout()
 

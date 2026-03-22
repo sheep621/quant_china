@@ -64,6 +64,11 @@ class DataCleaner:
             
         if 'pctChg' in df.columns:
             df['pctChg'] = pd.to_numeric(df['pctChg'], errors='coerce')
+            
+        # 生成 vwap (成交均价), 防止 Alpha101 算子出现缺失报错
+        if 'amount' in df.columns and 'volume' in df.columns:
+            # 避免除以 0, 无成交量时取收盘价
+            df['vwap'] = np.where(df['volume'] > 1e-5, df['amount'] / df['volume'], df['close'])
 
         # Limit Ratio Determination
         # 默认 10%
@@ -108,9 +113,9 @@ class DataCleaner:
             # 因此，这里的掩码真正该拦截的，是T+1日的is_limit_up和T+2日的is_limit_down！
             grouped_limit_up = df.groupby('code')['is_limit_up']
             grouped_limit_down = df.groupby('code')['is_limit_down']
-            df['next_is_limit_up'] = grouped_limit_up.shift(-1).fillna(False)
-            df['next_is_limit_down'] = grouped_limit_down.shift(-1).fillna(False)
-            df['next_2_is_limit_down'] = grouped_limit_down.shift(-2).fillna(False)
+            df['next_is_limit_up'] = grouped_limit_up.shift(-1).fillna(0).astype(bool)
+            df['next_is_limit_down'] = grouped_limit_down.shift(-1).fillna(0).astype(bool)
+            df['next_2_is_limit_down'] = grouped_limit_down.shift(-2).fillna(0).astype(bool)
 
         
         # 3. 特征预处理 (Rank + MAD)

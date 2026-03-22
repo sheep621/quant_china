@@ -162,17 +162,9 @@ def build_seed_programs(
     return seeds
 
 
-def inject_seeds_into_population(transformer, seeds: List[_Program], population_ratio: float = 0.3):
+def inject_seeds_into_population(transformer, seeds: List[_Program], X, y, population_ratio: float = 0.3):
     """
     将种子 Program 注入到已初始化的种群的第 0 代中。
-    
-    gplearn 的 _programs[0] 是第 0 代的种群列表。
-    我们按比例将种子替换掉其中一部分随机生成的个体。
-
-    参数:
-        transformer      : 已调用 fit() 的 SymbolicTransformer
-        seeds            : 要注入的 _Program 对象列表
-        population_ratio : 注入种子占总种群的比例 (最高不超过 0.5 防止多样性丧失)
     """
     if not hasattr(transformer, '_programs') or not transformer._programs:
         logger.warning("Seeder: Cannot inject - transformer not yet fitted (_programs not initialized).")
@@ -191,8 +183,24 @@ def inject_seeds_into_population(transformer, seeds: List[_Program], population_
     rng.shuffle(seeds)
     chosen_seeds = seeds[:n_inject]
 
-    # 替换种群头部个体
+    # 替换种群头部个体并强制评估它们的 fitness_
     for i, seed in enumerate(chosen_seeds):
-        population[i] = seed
+        try:
+            # 执行程序得到预测值
+            y_pred = seed.execute(X)
+            # 计算 raw_fitness
+            raw_fitness = transformer.metric(y, y_pred, None)
+            seed.raw_fitness_ = raw_fitness
+            
+            # 计算最终 fitness (带有简约惩罚)
+            penalty = transformer.parsimony_coefficient * seed.length_
+            if transformer.metric.greater_is_better:
+                seed.fitness_ = raw_fitness - penalty
+            else:
+                seed.fitness_ = raw_fitness + penalty
+                
+            population[i] = seed
+        except Exception as e:
+            logger.warning(f"Seeder: 无法评估注入种子 '{seed}' 的适应度，跳过。错误: {e}")
 
     logger.info(f"Seeder: Injected {n_inject} Alpha101 seeds into Generation 0 (pop_size={pop_size}, ratio={n_inject/pop_size:.1%}).")

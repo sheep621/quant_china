@@ -1,6 +1,8 @@
 # import fire
 import pandas as pd
+import numpy as np
 import os
+import warnings
 from datetime import datetime, timedelta
 from src.infrastructure.logger import get_system_logger
 from src.data_engine.loader import DataLoader
@@ -10,6 +12,10 @@ from src.model_layer.lgbm_trainer import LGBMTrainer
 from src.execution.backtest import Backtester
 
 logger = get_system_logger()
+
+# 屏蔽 GP 随机生成垃圾公式时必然产生的数学警告
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+np.seterr(all='ignore')
 
 class QuantPipeline:
     def __init__(self):
@@ -95,7 +101,7 @@ class QuantPipeline:
         df_mining = df_train_raw.copy()
         
         # Extract features dynamically to avoid discarding new cleaned features
-        exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio']
+        exclude_cols = ['date', 'code', 'label', 'next_open', 'next_2_open', 'is_limit_up', 'is_limit_down', 'next_is_limit_up', 'next_is_limit_down', 'next_2_is_limit_down', 'tradestatus', 'high_limit', 'limit_ratio', 'isST', 'adjustflag', 'is_tradable']
         base_features = [c for c in df_mining.columns if c not in exclude_cols]
         X_mining = df_mining[base_features]
         y_mining = df_mining['label']
@@ -140,12 +146,7 @@ class QuantPipeline:
         # 极速全局去均值除以标准差
         df_enriched[features_to_normalize] = (df_enriched[features_to_normalize] - mean_df) / (std_df + 1e-8)
         # ==========================================================
-        # 每日截面 z-score，规避大盘极端波动带来的绝对值漂移，将所有特征无量纲化
-        for col in features_to_normalize:
-            df_enriched[col] = df_enriched.groupby('date')[col].transform(
-                lambda x: (x - x.mean()) / (x.std() + 1e-8)
-            )
-        # ==========================================================
+
        
         df_train = df_enriched[df_enriched['date'] < split_date]
         df_val   = df_enriched[df_enriched['date'] >= split_date]

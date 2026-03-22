@@ -68,7 +68,7 @@ def make_ts_min(window):
 
 def make_ts_std(window):
     def _ts_std(x):
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
         sum_x = np.zeros_like(x)
         sum_x2 = np.zeros_like(x)
         for i in range(window):
@@ -84,8 +84,8 @@ def make_ts_std(window):
 
 def make_ts_corr(window):
     def _ts_corr(x, y):
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+        x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
+        y = np.clip(np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
         sum_x = np.zeros_like(x); sum_y = np.zeros_like(y)
         sum_xy = np.zeros_like(x); sum_x2 = np.zeros_like(x); sum_y2 = np.zeros_like(y)
         
@@ -105,7 +105,7 @@ def make_ts_corr(window):
         var_y = np.maximum((sum_y2 / window) - (mean_y ** 2), 1e-8)
         
         res = cov / np.sqrt(var_x * var_y)
-        res = np.nan_to_num(res, nan=0.0)
+        res = np.clip(np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
         return DataContext.mask_invalid_ts(res, window, default_val=0.0)
     return _ts_corr
 
@@ -132,7 +132,7 @@ def _cs_rank(x):
 
 def _cs_zscore(x):
     """截面 Z-Score 标准化"""
-    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
     indices = _get_date_indices()
     if not indices: return x
     
@@ -144,11 +144,11 @@ def _cs_zscore(x):
             res[idx] = (slice_x - np.mean(slice_x)) / std
         else:
             res[idx] = 0.0
-    return res
+    return np.clip(np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
 
 def _cs_mad(x):
     """截面 MAD 去极值 (Median Absolute Deviation)"""
-    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
     indices = _get_date_indices()
     if not indices: return x
     
@@ -163,7 +163,7 @@ def _cs_mad(x):
             res[idx] = np.clip(slice_x, lower, upper)
         else:
             res[idx] = slice_x
-    return res
+    return np.clip(np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
 
 def _sign(x):
     """符号函数：提取趋势方向"""
@@ -175,7 +175,7 @@ def make_ts_sum(window):
     依据：极度常用于成交量(Volume)和换手率的聚合。
     """
     def _ts_sum(x):
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
         res = np.zeros_like(x)
         for i in range(window):
             res += np.roll(x, i)
@@ -189,7 +189,7 @@ def make_ts_decay_linear(window):
     比普通 ts_mean 反应更灵敏，有效防止均线滞后。
     """
     def _ts_decay_linear(x):
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
         res = np.zeros_like(x)
         weight_sum = (window * (window + 1)) / 2.0
         for i in range(window):
@@ -270,50 +270,79 @@ def _cs_scale(x):
     return res
 
 
+def _if(condition, true_val, false_val):
+    """
+    IF 算子: 如果 condition > 0，返回 true_val，否则返回 false_val。
+    支持向量输入。
+    """
+    cond = np.nan_to_num(condition, nan=0.0, posinf=0.0, neginf=0.0)
+    return np.where(cond > 0, true_val, false_val)
+
+def _signpow(x, p):
+    """
+    SignPow 算子: sign(x) * (abs(x) ** p)
+    """
+    x_clean = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
+    p_clean = np.clip(np.nan_to_num(p, nan=1.0, posinf=1.0, neginf=1.0), -10.0, 10.0)
+    res = np.sign(x_clean) * (np.abs(x_clean) ** p_clean)
+    return np.clip(np.nan_to_num(res, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
+
+def make_ts_cov(window):
+    """
+    Ts_Cov: 过去 window 天的时间序列协方差
+    """
+    def _ts_cov(x, y):
+        x = np.clip(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
+        y = np.clip(np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
+        sum_x = np.zeros_like(x); sum_y = np.zeros_like(y)
+        sum_xy = np.zeros_like(x)
+        
+        for i in range(window):
+            rx = np.roll(x, i)
+            ry = np.roll(y, i)
+            sum_x += rx
+            sum_y += ry
+            sum_xy += rx * ry
+            
+        mean_x = sum_x / window
+        mean_y = sum_y / window
+        cov = (sum_xy / window) - (mean_x * mean_y)
+        
+        res = np.clip(np.nan_to_num(cov, nan=0.0, posinf=0.0, neginf=0.0), -1e10, 1e10)
+        return DataContext.mask_invalid_ts(res, window, default_val=0.0)
+    return _ts_cov
+
+
 # ==============================================================================
 # 注册到 gplearn 的算子库
 # ==============================================================================
 custom_operations = [
-    # --- 横截面算子 (防 Beta 污染) ---
-    make_function(function=_cs_rank, name='cs_rank', arity=1),
+    # --- 单变量与横截面算子 ---
+    make_function(function=_cs_rank, name='rank', arity=1),
+    make_function(function=_cs_scale, name='scale', arity=1),
     make_function(function=_cs_zscore, name='cs_zscore', arity=1),
     make_function(function=_cs_mad, name='cs_mad', arity=1),
     make_function(function=_sign, name='sign', arity=1),
     
-    # --- 时序均值类 ---
-    make_function(function=make_ts_mean(5), name='ts_mean_5', arity=1),
-    make_function(function=make_ts_mean(10), name='ts_mean_10', arity=1),
-    make_function(function=make_ts_mean(20), name='ts_mean_20', arity=1),
-    
-    # --- 时序极值类 ---
-    make_function(function=make_ts_max(5), name='ts_max_5', arity=1),
-    make_function(function=make_ts_max(10), name='ts_max_10', arity=1),
-    make_function(function=make_ts_min(5), name='ts_min_5', arity=1),
-    make_function(function=make_ts_min(10), name='ts_min_10', arity=1),
-    
-    # --- 时序波动与动量类 ---
-    make_function(function=make_ts_std(5), name='ts_std_5', arity=1),
-    make_function(function=make_ts_std(20), name='ts_std_20', arity=1),
-    make_function(function=make_ts_delay(1), name='ts_delay_1', arity=1),
-    make_function(function=make_ts_delta(1), name='ts_delta_1', arity=1),
-    make_function(function=make_ts_delta(5), name='ts_delta_5', arity=1),
-    
-    # --- 双变量时序相关性 ---
-    make_function(function=make_ts_corr(10), name='ts_corr_10', arity=2),
-
-    # 在 custom_operations 列表中补充：
-    
-    # --- 新增：时序累加与衰减 ---
-    make_function(function=make_ts_sum(5), name='ts_sum_5', arity=1),
-    make_function(function=make_ts_sum(20), name='ts_sum_20', arity=1),
-    make_function(function=make_ts_decay_linear(10), name='ts_decay_10', arity=1),
-    
-    # --- 新增：时序相对位置 ---
-    make_function(function=make_ts_rank(10), name='ts_rank_10', arity=1),
-    make_function(function=make_ts_rank(20), name='ts_rank_20', arity=1),
-    make_function(function=make_ts_argmax(10), name='ts_argmax_10', arity=1),
-    make_function(function=make_ts_argmin(10), name='ts_argmin_10', arity=1),
-
-    # --- 新增：截面放缩 ---
-    make_function(function=_cs_scale, name='cs_scale', arity=1),
+    # --- 基础算子 ---
+    make_function(function=_if, name='if', arity=3),
+    make_function(function=_signpow, name='signpow', arity=2),
 ]
+
+# 动态批量注册所有需要的窗口大小
+for w in [1, 2, 3, 5, 7, 10, 15, 20, 30]:
+    custom_operations.extend([
+        make_function(function=make_ts_mean(w), name=f'tsmean{w}', arity=1),
+        make_function(function=make_ts_sum(w), name=f'tssum{w}', arity=1),
+        make_function(function=make_ts_std(w), name=f'tsstd{w}', arity=1),
+        make_function(function=make_ts_max(w), name=f'tsmax{w}', arity=1),
+        make_function(function=make_ts_min(w), name=f'tsmin{w}', arity=1),
+        make_function(function=make_ts_rank(w), name=f'tsrank{w}', arity=1),
+        make_function(function=make_ts_argmax(w), name=f'tsargmax{w}', arity=1),
+        make_function(function=make_ts_argmin(w), name=f'tsargmin{w}', arity=1),
+        make_function(function=make_ts_delay(w), name=f'delay{w}', arity=1),
+        make_function(function=make_ts_delta(w), name=f'delta{w}', arity=1),
+        make_function(function=make_ts_corr(w), name=f'corr{w}', arity=2),
+        make_function(function=make_ts_cov(w), name=f'cov{w}', arity=2),
+        make_function(function=make_ts_decay_linear(w), name=f'decay{w}', arity=1),
+    ])
