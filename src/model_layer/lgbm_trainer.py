@@ -47,10 +47,14 @@ class LGBMTrainer:
         split_date = dates[split_idx]
 
         inner_train_df = df_train[df_train['date'] < split_date]
-        inner_val_df = df_train[df_train['date'] >= split_date]
+        
+        # 缺陷 4 修复：严格引入 T+2 Embargo (隔离带) 断绝特征时间轴污染
+        val_start_idx = split_idx + 2
+        val_start_date = dates[val_start_idx] if val_start_idx < len(dates) else dates[-1]
+        inner_val_df = df_train[df_train['date'] >= val_start_date]
 
         if inner_train_df.empty or inner_val_df.empty:
-            logger.warning("Not enough dates to split inner validation. Using full train.")
+            logger.warning("Not enough dates to split inner validation with embargo. Using full train.")
             inner_train_df = df_train
             inner_val_df = df_train
 
@@ -102,10 +106,15 @@ class LGBMTrainer:
 
             # 再次为 CV 的当前折切分内部 Validation Set
             fold_dates = sorted(df_train_fold['date'].unique())
-            inner_split_date = fold_dates[int(len(fold_dates) * 0.9)]
+            inner_split_idx = int(len(fold_dates) * 0.9)
+            inner_split_date = fold_dates[inner_split_idx]
             
             inner_train_df = df_train_fold[df_train_fold['date'] < inner_split_date]
-            inner_val_df = df_train_fold[df_train_fold['date'] >= inner_split_date]
+            
+            # 缺陷 4 修复：由于内部使用早停，必须在每一折验证上也加入 T+2 盲区
+            inner_val_start_idx = inner_split_idx + 2
+            inner_val_start_date = fold_dates[inner_val_start_idx] if inner_val_start_idx < len(fold_dates) else fold_dates[-1]
+            inner_val_df = df_train_fold[df_train_fold['date'] >= inner_val_start_date]
 
             # 使用更新后的 _prepare_lgb_data 构建带有 group 参数的训练集
             dtrain = self._prepare_lgb_data(inner_train_df, features, label)
@@ -155,9 +164,9 @@ class LGBMTrainer:
         df_sorted = df.sort_values('date').copy()
         
         # 2. 截面分箱：每天按收益率将股票分为 n_bins 档 (例如 0, 1, 2, 3, 4)
-        # qcut 会自动处理排名，duplicates='drop' 防止遇到大面积停牌/一字板时分箱报错
+        # 缺陷 1 修复：使用 rank(method='first') 彻底杜绝停牌跌停潮导致的全场同收益分箱坍缩问题
         df_sorted['label_int'] = df_sorted.groupby('date')[label_col].transform(
-            lambda x: pd.qcut(x, q=n_bins, labels=False, duplicates='drop')
+            lambda x: pd.qcut(x.rank(method='first'), q=n_bins, labels=False)
         )
         
         # 填充异常值（比如某天全市场停牌）为中间档位，并强制转为 int

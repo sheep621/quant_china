@@ -75,10 +75,11 @@ class DataLoader:
         # 添加带指数退避的重试机制，应对[Errno 32] Broken pipe
         max_retries = 3
         for attempt in range(max_retries):
+            # 缺陷 2 修复：严格使用 adjustflag="2" (前复权) 保障近期数据精度
             rs = bs.query_history_k_data_plus(code,
                 fields,
                 start_date=start_date, end_date=end_date,
-                frequency="d", adjustflag="1")
+                frequency="d", adjustflag="2")
                 
             if rs.error_code == '0':
                 break
@@ -233,7 +234,8 @@ class DataLoader:
                         existing['date'] = pd.to_datetime(existing['date'])
                         last_date_str = existing['date'].max().strftime("%Y-%m-%d")
                     
-                    start_today = (pd.to_datetime(last_date_str) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                    # 缺陷 3 修复：将起步时间 T+1 撤回至 T-1，利用 Upsert 动作抹去昨天甚至前天可能残缺的接口历史数据
+                    start_today = (pd.to_datetime(last_date_str) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
                     
                     if last_date_str >= end_date:
                         with lock: stats["skip_count"] += 1
@@ -250,7 +252,8 @@ class DataLoader:
                     new_df['date'] = pd.to_datetime(new_df['date'])
                     if existing is not None:
                         merged = pd.concat([existing, new_df], ignore_index=True)
-                        merged = merged.drop_duplicates(subset=['date', 'code']).sort_values('date')
+                        # 缺陷 3 修复：以 `keep='last'` 保留最新下载的正确记录
+                        merged = merged.drop_duplicates(subset=['date', 'code'], keep='last').sort_values('date')
                     else:
                         merged = new_df.sort_values('date')
                     merged.to_parquet(file_path, index=False)
