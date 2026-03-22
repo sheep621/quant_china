@@ -38,6 +38,14 @@ class UniverseFilter:
         # 2. Exclude Halt (processed in Cleaner usually, but double check)
         if common_cfg.get('exclude_halt', True) and 'tradestatus' in daily_df.columns:
             daily_df = daily_df[daily_df['tradestatus'] == '1']
+
+        # 🎯 核心修复 1：强力剔除 T 日“一字板”股票
+        # =========================================================================
+        if 'high' in daily_df.columns and 'low' in daily_df.columns:
+            # 如果当天最高价等于最低价，大概率是一字涨跌停。
+            # 直接将它们赶出备选池，断绝模型去拟合这些“妖股”的念想。
+            is_limit_board = daily_df['high'] == daily_df['low']
+            daily_df = daily_df[~is_limit_board]
             
         # 3. Liquidity Filter (if 'amount' exists)
         liq_cfg = self.config.get('liquidity', {})

@@ -147,6 +147,19 @@ class DataCleaner:
         df['next_open'] = grouped_open.shift(-1)   # Open_T+1
         df['next_2_open'] = grouped_open.shift(-2) # Open_T+2
         df['label'] = (df['next_2_open'] / df['next_open']) - 1.0
+
+        # 🎯 核心修复 2：剥夺 T+1 涨跌停股的“高分诱惑”
+        # =========================================================================
+        # 假设 grouped_limit_up 是之前逻辑算出的涨停判断序列
+        # 把 T+1 开盘即涨停（买不进）或 T+2 开盘即跌停（卖不出）的 label 全部置为 NaN。
+        # LightGBM 在 Lambdarank 模式下如果遇到 NaN 标签，会自动把它丢弃，
+        # 从而强迫模型去寻找那些“能稳健上涨，且实盘真的买得到”的优质股。
+        
+        if 'next_is_limit_up' in df.columns:
+            df.loc[df['next_is_limit_up'], 'label'] = np.nan
+        
+        if 'next_2_is_limit_down' in df.columns:
+            df.loc[df['next_2_is_limit_down'], 'label'] = np.nan
         
         # 【核心修复】：涨跌停及停牌不可交易陷阱
         # 停牌、ST、涨停买不到、跌停卖不出，统统设为 NaN，让评估器忽略它们
