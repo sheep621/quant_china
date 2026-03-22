@@ -21,97 +21,120 @@ class Backtester:
         self.total_orders = 0
         self.failed_orders = 0
 
-    def _calculate_inverse_volatility_weights(self, target_codes):
-        """风险平价雏形：计算历史波动率倒数加权"""
-        inv_vols = {}
+    def _calculate_risk_parity_weights(self, target_codes):
+        """工业级协方差 Risk Parity (等风险贡献) 算法"""
+        n = len(target_codes)
+        if n == 0: return {}
+        if n == 1: return {target_codes[0]: 1.0}
+            
+        returns_list = []
+        valid_codes = []
         for code in target_codes:
             prices = self.price_history.get(code, [])
-            if len(prices) < 5:
-                inv_vols[code] = 1.0  
-            else:
-                # 转换 array 并增加 1e-8 防止除以 0（如停牌假数据）
+            if len(prices) >= 10:  # 至少需要10天数据来计算协方差
                 prices_arr = np.array(prices, dtype=float)
                 rets = np.diff(prices_arr) / (prices_arr[:-1] + 1e-8)
-                vol = np.nan_to_num(np.std(rets), nan=0.0, posinf=0.0, neginf=0.0)
-                inv_vols[code] = 1.0 / (vol + 1e-5)
-                
-        total_inv_vol = sum(inv_vols.values())
-        if total_inv_vol == 0 or np.isnan(total_inv_vol):
-            return {code: 1.0 / max(len(target_codes), 1) for code in target_codes}
+                returns_list.append(rets)
+                valid_codes.append(code)
+        
+        if len(valid_codes) < n:
+            # 数据不足时降级为等权重
+            return {code: 1.0 / n for code in target_codes}
             
-        return {code: iv / total_inv_vol for code, iv in inv_vols.items()}
+        # 构建协方差矩阵
+        returns_matrix = np.vstack(returns_list)
+        cov_matrix = np.cov(returns_matrix)
+        
+        # 凸优化目标：使各资产的边际风险贡献 (Risk Contribution) 相等
+        def risk_budget_objective(weights, cov):
+            weights = np.array(weights)
+            port_var = weights.T @ cov @ weights
+            marginal_risk = cov @ weights
+            risk_contrib = weights * marginal_risk
+            target_risk = port_var / len(weights)
+            return np.sum(np.square(risk_contrib - target_risk))
+            
+        constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
+        bounds = tuple((0.0, 1.0) for _ in range(len(valid_codes)))
+        initial_guess = np.ones(len(valid_codes)) / len(valid_codes)
+        
+        try:
+            from scipy.optimize import minimize
+            res = minimize(risk_budget_objective, initial_guess, args=(cov_matrix,), 
+                           method='SLSQP', bounds=bounds, constraints=constraints)
+            weights = res.x if res.success else initial_guess
+        except Exception as e:
+            logger.warning(f"Risk Parity 优化失败，降级为等权: {e}")
+            weights = initial_guess
+            
+        final_weights = {code: 0.0 for code in target_codes}
+        for idx, code in enumerate(valid_codes):
+            final_weights[code] = weights[idx]
+            
+        return final_weights
+
+
 
     def execute_daily(self, date, alpha_scores, daily_data_dict):
-        """每日撮合逻辑：T+1 规则下的开盘执行"""
         current_value = self.cash
         
-        # 1. 提取当前持仓的市值，并更新历史价格
+        # 1. 更新市值与历史价格
         for code in list(self.positions.keys()):
             if code in daily_data_dict:
                 current_price = daily_data_dict[code].get('close', daily_data_dict[code].get('open', 0))
                 current_value += self.positions[code] * current_price
-                
-                if code not in self.price_history:
-                    self.price_history[code] = []
+                if code not in self.price_history: self.price_history[code] = []
                 self.price_history[code].append(current_price)
-                if len(self.price_history[code]) > 20:
-                    self.price_history[code].pop(0)
+                if len(self.price_history[code]) > 20: self.price_history[code].pop(0)
 
-        # 2. 选出 Alpha 最高的 Top N
+        # 2. 选出 Alpha 最高的 Top N 并计算协方差权重
         sorted_codes = sorted(alpha_scores, key=alpha_scores.get, reverse=True)
         target_codes = sorted_codes[:self.top_n]
-        
-        target_weights = self._calculate_inverse_volatility_weights(target_codes)
-        target_values = {code: current_value * weight for code, weight in target_weights.items()}
+        target_weights = self._calculate_risk_parity_weights(target_codes)
 
-        # 3. 执行卖出 (需先平仓释放资金)
+        # 3. 执行卖出 (释放资金)
         for code in list(self.positions.keys()):
-            if code not in target_values:
-                if code not in daily_data_dict:
-                    continue
-                
+            if code not in target_codes:
+                if code not in daily_data_dict: continue
                 day_data = daily_data_dict[code]
-                open_price = day_data['open']
-                # 假设 daily_data_dict 里带有昨收价 'pre_close'，如果没有可用 'open' 替代做粗略模拟
+                open_price = day_data.get('open', 0)
                 prev_close = day_data.get('pre_close', open_price) 
                 
-                _, can_sell = self.exchange.check_trade_limit(code, open_price, prev_close, day_data['high'], day_data['low'])
-                
+                _, can_sell = self.exchange.check_trade_limit(code, open_price, prev_close, day_data.get('high', 0), day_data.get('low', 0))
                 self.total_orders += 1
                 if not can_sell:
                     self.failed_orders += 1
-                    logger.debug(f"[{date}] {code} 触及跌停或停牌，卖出指令被拒绝")
                     continue
 
-                sell_shares = self.positions[code]
                 exec_price = self.exchange.get_actual_sell_price(open_price)
-                net_cash, _ = self.exchange.calculate_sell_cash(exec_price, sell_shares)
-                
+                net_cash, _ = self.exchange.calculate_sell_cash(exec_price, self.positions[code])
                 self.cash += net_cash
                 del self.positions[code]
 
-        # 4. 执行买入
-        for code in target_codes:
-            if code not in self.positions:
-                if code not in daily_data_dict:
-                    continue
+        # 4. 执行买入 (统筹分配可用资金池)
+        buy_list = [c for c in target_codes if c not in self.positions]
+        if buy_list:
+            total_buy_weight = sum(target_weights[c] for c in buy_list)
+            available_cash = self.cash  # 锁定当前可用总弹药
+            
+            for code in buy_list:
+                if total_buy_weight <= 0: break
+                if code not in daily_data_dict: continue
                     
                 day_data = daily_data_dict[code]
-                open_price = day_data['open']
+                open_price = day_data.get('open', 0)
                 prev_close = day_data.get('pre_close', open_price)
                 
-                can_buy, _ = self.exchange.check_trade_limit(code, open_price, prev_close, day_data['high'], day_data['low'])
-                
+                can_buy, _ = self.exchange.check_trade_limit(code, open_price, prev_close, day_data.get('high', 0), day_data.get('low', 0))
                 self.total_orders += 1
                 if not can_buy:
                     self.failed_orders += 1
-                    logger.debug(f"[{date}] {code} 触及涨停或停牌，买入指令被拒绝")
                     continue
 
-                target_value = target_values[code]
-                allocated_cash = min(self.cash, target_value)
+                # 根据股票在该批买入池中的相对权重，切分现金蛋糕
+                weight_in_pool = target_weights[code] / total_buy_weight
+                allocated_cash = available_cash * weight_in_pool
                 
-                # 引入交易所引擎处理真实成交价和精确份额计算
                 exec_price = self.exchange.get_actual_buy_price(open_price)
                 actual_buy = self.exchange.get_max_buyable_shares(allocated_cash, exec_price)
 

@@ -224,11 +224,36 @@ class AlphaGenerator:
             # 原有代码：执行 GP 训练
             self.gp.fit(X_clean, y_clean)
 
-
-
+            # --- 新增：施密特正交化降维打击 ---
+            logger.info("[Orthogonalization] Starting Gram-Schmidt check on discovered alphas...")
+            from src.alpha_factory.orthogonalizer import GramSchmidtOrthogonalizer
+            ortho = GramSchmidtOrthogonalizer(corr_threshold=0.8)
             
+            existing_features_matrix = np.empty((X_clean.shape[0], 0))
+            valid_programs = []
             
-            logger.info("=== GP Mining Completed ===")
+            for prog in self.gp._best_programs:
+                if prog is None: continue
+                # 执行公式生成 alpha_scores
+                alpha_scores = prog.execute(X_clean)
+                
+                # 调用此类校验
+                checked_scores = ortho.check_and_orthogonalize(alpha_scores, existing_features_matrix)
+                
+                if checked_scores is not None:
+                    # 如果返回不是 None，说明可以保留
+                    valid_programs.append(prog)
+                    # 将其加入 existing_features_matrix 供下一个比较
+                    existing_features_matrix = np.column_stack((existing_features_matrix, checked_scores))
+                    
+                # 凑够 n_components 个异构因子即可停止
+                if len(valid_programs) >= self.gp.n_components:
+                    break
+                    
+            # 覆盖原始的 _best_programs 使得后续 transform 时只应用去重后的异构因子
+            self.gp._best_programs = valid_programs
+            
+            logger.info(f"=== GP Mining Completed (Orthogonalized to {len(valid_programs)} features) ===")
             saved_alphas = []
             for i, prog in enumerate(self.gp._best_programs[:10]):
                 if prog is None: continue
