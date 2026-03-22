@@ -139,6 +139,55 @@ class Backtester:
         # 新增执行层质量评估
         ffr = 1.0 - (self.failed_orders / max(self.total_orders, 1))
         
+        # 🎯 核心升级：Benchmark 接入与超额收益计算
+        try:
+            from src.data_engine.loader import DataLoader
+            loader = DataLoader()
+            loader.login()
+            
+            # 从回测记录中提取开始和结束日期
+            start_date = df['date'].min()
+            end_date = df['date'].max()
+            
+            # 使用针对指数优化的专用接口
+            bm_df = loader.fetch_benchmark_data(
+                code="sh.000300", 
+                start_date=str(start_date)[:10], 
+                end_date=str(end_date)[:10]
+            )
+            loader.logout()
+            
+            if bm_df is not None and not bm_df.empty:
+                # 统一为字符串格式对齐
+                df['date_str'] = df['date'].dt.strftime('%Y-%m-%d') if pd.api.types.is_datetime64_any_dtype(df['date']) else df['date'].astype(str)
+                bm_df['date_str'] = bm_df['date'].astype(str)
+                
+                # 合并基准涨跌幅
+                merged = pd.merge(df, bm_df[['date_str', 'pctChg']], on='date_str', how='left')
+                merged['bm_return'] = (merged['pctChg'] / 100).fillna(0)
+                
+                # 基准累计收益与超额收益
+                bm_cum_ret = (1 + merged['bm_return']).prod() - 1
+                excess_cum_ret = cum_ret - bm_cum_ret
+                
+                # 每日超额收益特征（用于核算信息比率）
+                merged['excess_daily'] = merged['return'] - merged['bm_return']
+                excess_std = merged['excess_daily'].std() * np.sqrt(252)
+                excess_annual_ret = (1 + excess_cum_ret) ** (252 / len(df)) - 1 if len(df) > 0 else 0
+                ir = excess_annual_ret / excess_std if excess_std > 0 else 0
+                
+                return {
+                    "Absolute Cum. Return": round(cum_ret, 4),
+                    "Benchmark Cum. Return": round(bm_cum_ret, 4),
+                    "Excess Annual Return": round(excess_annual_ret, 4),
+                    "Sharpe Ratio": round(sharpe, 4),
+                    "Information Ratio (IR)": round(ir, 4),
+                    "Full Fill Rate (FFR)": round(ffr, 4)
+                }
+        except Exception as e:
+            logger.warning(f"Failed to calculate benchmark metrics: {e}")
+            
+        # Fallback 退化版本
         return {
             "Cumulative Return": round(cum_ret, 4),
             "Annualized Return": round(annual_ret, 4),

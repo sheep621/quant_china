@@ -108,6 +108,46 @@ class DataLoader:
                 
         return df
 
+    def fetch_benchmark_data(self, code="sh.000300", start_date="2020-01-01", end_date="2024-01-01"):
+        """
+        专用查询接口：拉取指数历史日线（不复权、无换手率、无ST标记）
+        """
+        fields = "date,code,open,high,low,close,volume,amount,pctChg"
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            # 指数通常使用 adjustflag="3" (不复权)
+            rs = bs.query_history_k_data_plus(code,
+                fields,
+                start_date=start_date, end_date=end_date,
+                frequency="d", adjustflag="3")
+                
+            if rs.error_code == '0':
+                break
+                
+            logger.warning(f"Benchmark attempt {attempt+1}/{max_retries} failed for {code}: {rs.error_msg}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                
+        if rs.error_code != '0':
+            logger.error(f"Failed to fetch benchmark {code}: {rs.error_msg}")
+            return None
+            
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+            
+        if not data_list:
+            return None
+            
+        df = pd.DataFrame(data_list, columns=rs.fields)
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount', 'pctChg']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+        return df
+
     def update_data(self, codes, start_date, end_date):
         """Update data for a list of codes (Parallel Version)"""
         logger.info(f"Starting PARALLEL data update for {len(codes)} stocks from {start_date} to {end_date}")
